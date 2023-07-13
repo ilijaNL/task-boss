@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg14-latest
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app
+    ports:
+      - '5432:5432'
+    restart: on-failure
+    networks:
+      - internal
+networks:
+  internal:
+    driver: bridge
