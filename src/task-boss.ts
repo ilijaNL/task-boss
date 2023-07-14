@@ -3,13 +3,12 @@ import {
   EventDefinition,
   EventHandler,
   EventSpec,
-  Handler,
   TEvent,
   Task,
   TaskClient,
   TaskConfig,
   TaskDefinition,
-  TaskTrigger,
+  TaskHandler,
   createEventHandler,
   defaultTaskConfig,
 } from './definitions';
@@ -43,7 +42,7 @@ export type OutgoingTask = Task<{}> & {
 };
 
 export type TaskClientImpl<R extends Record<string, TaskDefinition<TSchema>>> = {
-  [K in keyof R]: Handler<Static<R[K]['schema']>>;
+  [K in keyof R]: TaskHandler<Static<R[K]['schema']>>;
 };
 
 /**
@@ -63,7 +62,7 @@ export type TaskBoss = {
   registerTask: <T extends TSchema>(
     taskDef: TaskDefinition<T>,
     props: {
-      handler: Handler<Static<T>>;
+      handler: TaskHandler<Static<T>>;
       overrideConfig?: Partial<TaskConfig>;
     }
   ) => TaskBoss;
@@ -74,7 +73,7 @@ export type TaskBoss = {
        * Task name. Should be for this bus instance
        */
       task_name: string;
-      handler: Handler<Static<T>>;
+      handler: TaskHandler<Static<T>>;
       /**
        * Event handler configuration. Can be static or a function
        */
@@ -98,12 +97,7 @@ export type TaskBoss = {
   /**
    * Execute the handler for an incoming task
    */
-  handle: <Input>(props: {
-    task_name: string;
-    input: Input;
-    trigger: TaskTrigger;
-    expire_in_seconds: number;
-  }) => Promise<any>;
+  handle: TaskHandler<unknown>;
 };
 
 export type TaskBossConfiguration = {
@@ -117,7 +111,7 @@ type TaskName = string & { __type?: string };
 
 export const createTaskBoss = (_queue: string, opts?: TaskBossConfiguration): TaskBoss => {
   const eventHandlers: Array<EventHandler<string, any>> = [];
-  const taskHandlersMap = new Map<TaskName, TaskState & { handler: Handler<any> }>();
+  const taskHandlersMap = new Map<TaskName, TaskState & { handler: TaskHandler<any> }>();
 
   return {
     get queue() {
@@ -153,16 +147,16 @@ export const createTaskBoss = (_queue: string, opts?: TaskBossConfiguration): Ta
         };
       });
     },
-    async handle(props) {
-      const taskHandler = taskHandlersMap.get(props.task_name);
+    async handle(input, meta_data) {
+      const taskHandler = taskHandlersMap.get(meta_data.task_name);
 
       // log
       if (!taskHandler) {
-        console.error('task handler ' + props.task_name + 'not registered for queue ' + _queue);
-        throw new Error('task handler ' + props.task_name + 'not registered for queue ' + _queue);
+        console.error('task handler ' + meta_data.task_name + 'not registered for queue ' + _queue);
+        throw new Error('task handler ' + meta_data.task_name + 'not registered for queue ' + _queue);
       }
 
-      return await resolveWithinSeconds(taskHandler.handler(props), props.expire_in_seconds);
+      return await resolveWithinSeconds(taskHandler.handler(input as any, meta_data), meta_data.expire_in_seconds);
     },
     registerTaskClient<R extends Record<string, TaskDefinition<TSchema>>>(
       client: TaskClient<R>,

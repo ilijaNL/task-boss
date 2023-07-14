@@ -21,7 +21,10 @@ tap.test('task-boss', async (tap) => {
     const taskBoss = createTaskBoss('queueA', {});
 
     await t.rejects(() =>
-      taskBoss.handle({ expire_in_seconds: 12, input: {}, task_name: 'test', trigger: { type: 'direct' } })
+      taskBoss.handle(
+        {},
+        { expire_in_seconds: 12, id: '123', task_name: 'test', retried: 0, trigger: { type: 'direct' } }
+      )
     );
   });
 
@@ -41,7 +44,10 @@ tap.test('task-boss', async (tap) => {
     });
 
     await t.rejects(() =>
-      taskBoss.handle({ expire_in_seconds: 0.1, input: {}, task_name: 'test', trigger: { type: 'direct' } })
+      taskBoss.handle(
+        {},
+        { expire_in_seconds: 0.1, id: '123', retried: 0, task_name: 'test', trigger: { type: 'direct' } }
+      )
     );
   });
 
@@ -67,12 +73,16 @@ tap.test('task-boss', async (tap) => {
 
     const eventData = event.from({});
 
-    const result = await taskBoss.handle({
-      expire_in_seconds: 10,
-      input: eventData.data,
-      task_name: 'test',
-      trigger: { type: 'direct' },
-    });
+    const result = await taskBoss.handle(
+      {},
+      {
+        expire_in_seconds: 10,
+        id: '123',
+        retried: 0,
+        task_name: 'test',
+        trigger: { type: 'direct' },
+      }
+    );
 
     t.equal(result, handlerResult);
   });
@@ -341,7 +351,7 @@ tap.test('taskclient', async (t) => {
   });
 
   bus.registerTaskClient(client, {
-    async abc({ input }) {
+    async abc(input) {
       return {};
     },
     async test() {

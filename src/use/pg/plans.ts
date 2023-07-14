@@ -100,7 +100,7 @@ export type SelectTask<T = object> = {
 
 export type SQLPlans = ReturnType<typeof createPlans>;
 
-export const createInserTask = (task: OutgoingTask, trigger: TaskTrigger, keepInSeconds: number) => ({
+export const createInserTask = (task: OutgoingTask, trigger: TaskTrigger, keepInSeconds: number): InsertTask => ({
   d: {
     data: task.data,
     tn: task.task_name,

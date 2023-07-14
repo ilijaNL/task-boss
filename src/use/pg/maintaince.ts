@@ -50,7 +50,7 @@ export const createMaintainceWorker = (props: { schema: string; client: PGClient
       await query(props.client, plans.purgeTasks());
       await query(props.client, plans.expireTasks());
     },
-    { loopInterval: props.intervalInMs ?? 30000 }
+    { loopInterval: props.intervalInMs || 30000 }
   );
 
   return worker;

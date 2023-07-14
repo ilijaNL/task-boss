@@ -2,32 +2,9 @@ import { createBaseWorker } from '../../worker';
 import { PGClient, query } from './sql';
 import { createBatcher } from 'node-batcher';
 import { SQLPlans, SelectTask } from './plans';
+import { mapCompletionDataArg } from '../../utils';
 
-type ResolveResponse = { task_id: string; success: boolean; payload: any };
-
-function replaceErrors(value: any) {
-  if (value instanceof Error) {
-    var error = {} as any;
-
-    Object.getOwnPropertyNames(value).forEach(function (propName) {
-      error[propName] = (value as any)[propName];
-    });
-
-    return error;
-  }
-
-  return value;
-}
-
-function mapCompletionDataArg(data: any) {
-  if (data === null || typeof data === 'undefined' || typeof data === 'function') {
-    return null;
-  }
-
-  const result = typeof data === 'object' && !Array.isArray(data) ? data : { value: data };
-
-  return replaceErrors(result);
-}
+export type ResolveResponse = { task_id: string; success: boolean; payload: any };
 
 export const createTaskWorker = (props: {
   client: PGClient;
