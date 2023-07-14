@@ -336,8 +336,8 @@ tap.test('task worker', async (t) => {
 tap.test('maintaince worker', async (t) => {
   t.jobs = 5;
 
-  const queue = 'maintaince';
-  const schema = 'maintaince';
+  const queue = 'maintaince_q';
+  const schema = 'maintaince_schema';
   const plans = createPlans(schema, queue);
 
   const tboss = createTaskBoss(queue);
@@ -363,10 +363,8 @@ tap.test('maintaince worker', async (t) => {
     worker.start();
     t.teardown(() => worker.stop());
 
-    await query(sqlPool, plans.createTasks([]));
-
     const outgoingTask = tboss.getTask({
-      task_name: 'expired-task',
+      task_name: 'expired-task-123',
       config: {
         expireInSeconds: 1,
         retryBackoff: false,
@@ -380,10 +378,13 @@ tap.test('maintaince worker', async (t) => {
 
     await query(sqlPool, plans.createTasks([insertTask]));
 
+    // mark the task as started
+    await query(sqlPool, plans.getTasks({ amount: 100 }));
+
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = 'expired-task' LIMIT 1`)
+      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = 'expired-task-123' LIMIT 1`)
       .then((r) => r.rows[0]);
 
     t.equal(result.state, TASK_STATES.expired);
