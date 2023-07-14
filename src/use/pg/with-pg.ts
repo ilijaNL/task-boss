@@ -112,8 +112,14 @@ export const withPG = (
     poolInternvalInMs: workerConfig.intervalInMs,
     refillThresholdPct: workerConfig.refillFactor,
     plans: sqlPlans,
-    async handler({ data: { data, tn, trace }, expire_in_seconds }) {
-      await taskBoss.handle({ input: data, task_name: tn, trigger: trace, expire_in_seconds: expire_in_seconds });
+    async handler({ data: { data, tn, trace }, expire_in_seconds, retrycount, id }) {
+      await taskBoss.handle(data, {
+        expire_in_seconds: expire_in_seconds,
+        id: id,
+        retried: retrycount,
+        task_name: tn,
+        trigger: trace,
+      });
     },
   });
 
@@ -142,7 +148,6 @@ export const withPG = (
                   e: {
                     id: event.id,
                     name: event.event_name,
-                    p: event.position,
                   },
                 },
                 keepInSeconds

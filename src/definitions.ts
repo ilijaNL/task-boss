@@ -29,10 +29,6 @@ export type TaskTrigger =
          * Event name
          */
         name: string;
-        /**
-         * Event position
-         */
-        p: string;
       };
     };
 
@@ -86,7 +82,7 @@ export const defineEvent = <TName extends string, T extends TSchema>(
 export interface EventHandler<TName extends string, T extends TSchema> {
   task_name: string;
   def: EventDefinition<TName, T>;
-  handler: Handler<Static<T>>;
+  handler: TaskHandler<Static<T>>;
   config: Partial<TaskConfig> | ((input: Static<T>) => Partial<TaskConfig>);
 }
 
@@ -127,8 +123,17 @@ export interface Task<Data = {}> {
   config: Partial<TaskConfig>;
 }
 
-export interface Handler<Input> {
-  (props: { task_name: string; input: Input; trigger: TaskTrigger }): Promise<any>;
+// export type IncomingTask<Input> = { task_name: string; input: Input; trigger: TaskTrigger; expire_in_seconds: number };
+export type IncomingTaskMetaData = {
+  id: string;
+  expire_in_seconds: number;
+  task_name: string;
+  trigger: TaskTrigger;
+  retried: number;
+};
+
+export interface TaskHandler<Input, Res = any> {
+  (data: Input, meta_data: IncomingTaskMetaData): Promise<Res>;
 }
 
 export const defaultTaskConfig: TaskConfig = {
@@ -226,7 +231,7 @@ export const createEventHandler = <TName extends string, T extends TSchema>(prop
   /**
    * Event handler
    */
-  handler: Handler<Static<T>>;
+  handler: TaskHandler<Static<T>>;
   /**
    * Event handler configuration. Can be static or a function
    */

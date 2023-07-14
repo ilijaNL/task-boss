@@ -51,3 +51,27 @@ export const resolveWithinSeconds = async (promise: Promise<any>, seconds: numbe
 
   return result;
 };
+
+export function replaceErrors(value: any) {
+  if (value instanceof Error) {
+    var error = {} as any;
+
+    Object.getOwnPropertyNames(value).forEach(function (propName) {
+      error[propName] = (value as any)[propName];
+    });
+
+    return error;
+  }
+
+  return value;
+}
+
+export function mapCompletionDataArg(data: any) {
+  if (data === null || typeof data === 'undefined' || typeof data === 'function') {
+    return null;
+  }
+
+  const result = typeof data === 'object' && !Array.isArray(data) ? data : { value: data };
+
+  return replaceErrors(result);
+}

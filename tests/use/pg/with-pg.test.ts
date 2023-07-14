@@ -45,10 +45,10 @@ tap.test('with-pg', async (tap) => {
     let handled = 0;
 
     tb.registerTask(taskDef, {
-      handler: async (props) => {
+      handler: async (input, { trigger }) => {
         handled += 1;
-        equal(props.input.works, 'abcd');
-        equal(props.trigger.type, 'direct');
+        equal(input.works, 'abcd');
+        equal(trigger.type, 'direct');
         if (handled > 1) {
           ee.emit('handled');
         }
@@ -88,27 +88,27 @@ tap.test('with-pg', async (tap) => {
 
     tb.on(event, {
       task_name: 'task1',
-      handler: async (props) => {
-        t.equal(props.input.text, 'text222');
-        t.equal(props.trigger.type, 'event');
+      handler: async (input, { trigger }) => {
+        t.equal(input.text, 'text222');
+        t.equal(trigger.type, 'event');
         ee.emit('handled1');
       },
     });
 
     tb.on(event, {
       task_name: 'task_2',
-      handler: async (props) => {
-        t.equal(props.input.text, 'text222');
-        t.equal(props.trigger.type, 'event');
+      handler: async (input, { trigger }) => {
+        t.equal(input.text, 'text222');
+        t.equal(trigger.type, 'event');
         ee.emit('handled2');
       },
     });
 
     tb.on(event2, {
       task_name: 'task_3',
-      handler: async (props) => {
-        t.equal(props.input.rrr, 'event2');
-        t.equal(props.trigger.type, 'event');
+      handler: async (input, { trigger }) => {
+        t.equal(input.rrr, 'event2');
+        t.equal(trigger.type, 'event');
         ee.emit('handled3');
       },
     });
@@ -276,13 +276,9 @@ tap.test('with-pg', async (tap) => {
 
     tb.on(event, {
       task_name: 'task_1',
-      handler: async (props) => {
+      handler: async (input) => {
         count++;
-        equal(props.input.text, count.toString());
-
-        if (props.trigger.type === 'event') {
-          equal(props.trigger.e.p, count.toString());
-        }
+        equal(input.text, count.toString());
 
         ee.emit('task_1');
       },
