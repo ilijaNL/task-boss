@@ -113,7 +113,7 @@ export const withPG = (
     refillThresholdPct: workerConfig.refillFactor,
     plans: sqlPlans,
     async handler({ data: { data, tn, trace }, expire_in_seconds, retrycount, id }) {
-      await taskBoss.handle(data, {
+      return taskBoss.handle(data, {
         expire_in_seconds: expire_in_seconds,
         id: id,
         retried: retrycount,

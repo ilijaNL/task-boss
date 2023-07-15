@@ -106,7 +106,7 @@ const withWebhook = (taskBoss: TaskBoss, remote: WebhookService) => {
       return remote.submitTasks(remoteTasks);
     },
     async onTask(task: IncomingRemoteTask) {
-      return await taskBoss.handle(task.d, {
+      return taskBoss.handle(task.d, {
         expire_in_seconds: task.es,
         id: task.id,
         retried: task.r,

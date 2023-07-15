@@ -23,18 +23,17 @@ tap.test('with-pg', async (tap) => {
     await sqlPool.end();
   });
 
-  tap.test('smoke test', async ({ teardown, pass }) => {
+  tap.test('smoke test', async ({ pass }) => {
     const pgTasks = withPG(createTaskBoss('smoke_test'), { db: sqlPool, schema: schema });
 
     await pgTasks.start();
-    teardown(() => pgTasks.stop());
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await pgTasks.stop();
     pass('passes');
   });
 
-  tap.test('emit tasks', async ({ teardown, equal }) => {
+  tap.test('emit tasks', async ({ teardown, equal, same }) => {
     const ee = new EventEmitter();
-    const queue = 'emit_queue';
+    const queue = 'emit_tasks_result';
     const tb = createTaskBoss(queue);
 
     const task_name = 'emit_task';
@@ -52,6 +51,9 @@ tap.test('with-pg', async (tap) => {
         if (handled > 1) {
           ee.emit('handled');
         }
+        return {
+          success: 'with result',
+        };
       },
     });
 
@@ -65,6 +67,53 @@ tap.test('with-pg', async (tap) => {
 
     await pgTasks.send(taskDef.from({ works: 'abcd' }), taskDef.from({ works: 'abcd' }));
     await waitProm;
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const result = await sqlPool
+      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${task_name}'`)
+      .then((r) => r.rows[0]!);
+
+    same(result.output, {
+      success: 'with result',
+    });
+  });
+
+  tap.test('stores error as result on task handler error', async ({ teardown, equal }) => {
+    const ee = new EventEmitter();
+    const queue = 'emit_tasks_error';
+    const tb = createTaskBoss(queue);
+
+    const task_name = 'emit_task';
+    const taskDef = defineTask({
+      task_name: task_name,
+      schema: Type.Object({ works: Type.String() }),
+    });
+
+    tb.registerTask(taskDef, {
+      handler: async () => {
+        ee.emit('handled');
+        throw new Error('expected-error');
+      },
+    });
+
+    const pgTasks = withPG(tb, { db: sqlPool, schema: schema });
+
+    await pgTasks.start();
+
+    teardown(() => pgTasks.stop());
+
+    const waitProm = once(ee, 'handled');
+
+    await pgTasks.send(taskDef.from({ works: 'abcd' }));
+    await waitProm;
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const result = await sqlPool
+      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${task_name}'`)
+      .then((r) => r.rows[0]!);
+    equal(result.output.message, 'expected-error');
   });
 
   tap.test('emit event', async (t) => {
