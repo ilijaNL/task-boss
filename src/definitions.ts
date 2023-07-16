@@ -52,7 +52,7 @@ export interface EventDefinition<Name extends string, Schema extends TSchema> {
 }
 
 /**
- * Define an integration event.  Task name should be unique for a pg-tbus instance
+ * Define an integration event.  Task name should be unique when registering
  */
 export const defineEvent = <TName extends string, T extends TSchema>(
   spec: EventSpec<TName, T>
@@ -217,12 +217,9 @@ export const defineTask = <T extends TSchema>(props: DefineTaskProps<T>): TaskDe
 // };
 
 /**
- * Create an event handler from an event definition. Task name should be unique for a pg-tbus instance
+ * Create an event handler from an event definition.
  */
 export const createEventHandler = <TName extends string, T extends TSchema>(props: {
-  /**
-   * Task name. Should be unique per pg-tbus instance
-   */
   task_name: string;
   /**
    * Event definitions
@@ -280,7 +277,7 @@ export type TaskClient<D = {}> = {
  *     },
  *   });
  *
- * bus.registerTaskClient(client, {
+ * tb.registerTaskClient(client, {
  *  async abc({ input }) {
  *     return {};
  *   },

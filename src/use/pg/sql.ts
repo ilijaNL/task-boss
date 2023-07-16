@@ -4,7 +4,7 @@ export interface QueryResultRow {
   [column: string]: any;
 }
 
-export const schemaRE = new RegExp('{{schema}}', 'g');
+const schemaRE = new RegExp('{{schema}}', 'g');
 
 export type PGClient = {
   query: <T = any>(props: {

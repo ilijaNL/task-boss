@@ -1,8 +1,8 @@
 import { Pool } from 'pg';
-import { withPG } from '../../../src/use/pg/with-pg';
+import { withPG } from '../../../src/use/pg';
 import { cleanupSchema, createRandomSchema } from './helpers';
 import tap from 'tap';
-import createTaskBoss from '../../../src/task-boss';
+import { createTaskBoss } from '../../../src';
 import EventEmitter, { once } from 'node:events';
 import { defineEvent, defineTask } from '../../../src/definitions';
 import { Type } from '@sinclair/typebox';

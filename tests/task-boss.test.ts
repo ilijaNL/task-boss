@@ -1,8 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import tap from 'tap';
-import createTaskBoss from '../src/task-boss';
 import stringify from 'safe-stable-stringify';
-import { createTaskClient, defineEvent, defineTask } from '../src/definitions';
+import { createTaskClient, defineEvent, defineTask, createTaskBoss } from '../src/';
 
 tap.test('task-boss', async (tap) => {
   tap.jobs = 5;
