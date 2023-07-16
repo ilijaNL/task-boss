@@ -58,9 +58,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.26.6",
-    "ajv": "^8.8.2",
-    "ajv-formats": "^2.1.1",
+    "@sinclair/typebox": "^0.29.4",
     "delay": "^5.0.0",
     "node-batcher": "^0.1.3"
   },

@@ -1,7 +1,6 @@
 import { Static, TSchema } from '@sinclair/typebox';
-import { ValidateFunction } from 'ajv';
-import { createValidateFn } from './schema';
 import { Simplify } from './utils';
+import { Value } from '@sinclair/typebox/value';
 
 export interface TEvent<Name = string, Data = {}> {
   event_name: Name;
@@ -47,7 +46,9 @@ export interface EventSpec<Name extends string, Schema extends TSchema> {
 export interface EventDefinition<Name extends string, Schema extends TSchema> {
   event_name: Name;
   schema: Schema;
-  validate: ValidateFunction<Static<Schema, []>>;
+  /**
+   * Creates an event from a input. This input is validated against the schema.
+   */
   from: (input: Static<Schema>) => TEvent<Name, Static<Schema>>;
 }
 
@@ -58,12 +59,11 @@ export const defineEvent = <TName extends string, T extends TSchema>(
   spec: EventSpec<TName, T>
 ): EventDefinition<TName, T> => {
   const { event_name, schema } = spec;
-  const validate = createValidateFn(schema);
 
-  function from(input: Static<T>, opts?: Partial<{ retention_in_days: number }>): TEvent<TName, Static<T>> {
-    const validateFn = validate;
-    if (!validateFn(input)) {
-      throw new Error(`invalid input for event ${event_name}: ${validateFn.errors?.map((e) => e.message).join(' \n')}`);
+  function from(input: Static<T>): TEvent<TName, Static<T>> {
+    const errors = [...Value.Errors(spec.schema, input)];
+    if (errors.length > 0) {
+      throw new Error(`invalid input for event ${event_name}: ${errors.map((e) => e.message).join(' \n')}`);
     }
     return {
       data: input,
@@ -74,7 +74,6 @@ export const defineEvent = <TName extends string, T extends TSchema>(
   return {
     event_name,
     schema,
-    validate,
     from,
   };
 };
@@ -93,7 +92,7 @@ export interface DefineTaskProps<T extends TSchema> {
   task_name: string;
   /**
    * Queue this task belongs to.
-   * If not specified, the queue will be set to service when task is send from a tbus instance.
+   * If not specified, the queue will be set to instances's queue when task is send.
    */
   queue?: string;
   /**
@@ -101,20 +100,17 @@ export interface DefineTaskProps<T extends TSchema> {
    */
   schema: T;
   /**
-   * Default task configuration. Can be (partially) override when creating the task
+   * Default task configuration
    */
   config?: Partial<TaskConfig>;
 }
 
 export interface TaskDefinition<T extends TSchema> extends DefineTaskProps<T> {
-  validate: ValidateFunction<Static<T, []>>;
+  /**
+   * Creates a tasks from an input. The input is validated against the schema.
+   */
   from: (input: Static<T>, config?: Partial<TaskConfig>) => Task<Static<T>>;
 }
-
-// export interface TaskHandler<T extends TSchema> extends TaskDefinition<T> {
-//   handler: Handler<Static<T>>;
-//   config: Partial<TaskConfig>;
-// }
 
 export interface Task<Data = {}> {
   task_name: string;
@@ -173,15 +169,7 @@ export type TaskConfig = {
 };
 
 export const defineTask = <T extends TSchema>(props: DefineTaskProps<T>): TaskDefinition<T> => {
-  const validateFn = createValidateFn(props.schema);
-
-  const from: TaskDefinition<T>['from'] = function from(input, config) {
-    if (!validateFn(input)) {
-      throw new Error(
-        `invalid input for task ${props.task_name}: ${validateFn.errors?.map((e) => e.message).join(' \n')}`
-      );
-    }
-
+  const _from: TaskDefinition<T>['from'] = function from(input, config) {
     return {
       queue: props.queue,
       task_name: props.task_name,
@@ -190,31 +178,24 @@ export const defineTask = <T extends TSchema>(props: DefineTaskProps<T>): TaskDe
     };
   };
 
+  const from: TaskDefinition<T>['from'] = function from(input, config) {
+    const errors = [...Value.Errors(props.schema, input)];
+    if (errors.length > 0) {
+      throw new Error(`invalid input for task ${props.task_name}: ${errors.map((e) => e.message).join(' \n')}`);
+    }
+
+    return _from(input, config);
+  };
+
   return {
     schema: props.schema,
     task_name: props.task_name,
     queue: props.queue,
-    validate: validateFn,
     from,
     // specifiy some defaults
     config: props.config ?? {},
   };
 };
-
-// export const createTaskHandler = <T extends TSchema>(props: {
-//   taskDef: TaskDefinition<T>;
-//   handler: Handler<Static<T>>;
-// }): TaskHandler<T> => {
-//   return {
-//     config: props.taskDef.config ?? {},
-//     handler: props.handler,
-//     from: props.taskDef.from,
-//     schema: props.taskDef.schema,
-//     task_name: props.taskDef.task_name,
-//     validate: props.taskDef.validate,
-//     queue: props.taskDef.queue,
-//   };
-// };
 
 /**
  * Create an event handler from an event definition.

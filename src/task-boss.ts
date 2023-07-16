@@ -91,7 +91,8 @@ export type TaskBoss = {
    */
   getTask: (task: Task) => OutgoingTask;
   /**
-   * Get tasks from events
+   * Get tasks from events.
+   * This performs no validation against the task schema.
    */
   toTasks: (event: IncomingEvent) => OutgoingTask[];
   /**
