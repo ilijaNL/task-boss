@@ -83,7 +83,7 @@ export type TaskBoss = {
   registerTaskClient: <R extends Record<string, TaskDefinition<any>>>(
     client: TaskClient<R>,
     impl: TaskClientImpl<R>
-  ) => void;
+  ) => TaskBoss;
   /** Get serializble state of the taskboss */
   getState: () => TaskBossState;
   /**
@@ -105,7 +105,7 @@ export type TaskBossConfiguration = {
   /**
    * Default configuration of eventHandlers/task handlers
    */
-  handlerConfig?: Partial<TaskConfig>;
+  handlerConfig?: Partial<Omit<TaskConfig, 'singletonKey' | 'startAfterSeconds'>>;
 };
 
 type TaskName = string & { __type?: string };
@@ -168,6 +168,8 @@ export const createTaskBoss = (_queue: string, opts?: TaskBossConfiguration): Ta
           handler: impl[key],
         });
       });
+
+      return this;
     },
     registerTask(taskDef, props) {
       if (taskHandlersMap.has(taskDef.task_name)) {

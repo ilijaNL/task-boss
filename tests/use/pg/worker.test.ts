@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import tap from 'tap';
-import { InsertTask, SelectTask, TASK_STATES, createInserTask, createPlans } from '../../../src/use/pg/plans';
+import { InsertTask, SelectTask, TASK_STATES, createInsertTask, createPlans } from '../../../src/use/pg/plans';
 import { createMaintainceWorker } from '../../../src/use/pg/maintaince';
 import { migrate } from '../../../src/use/pg/migrations';
 import { cleanupSchema } from './helpers';
@@ -52,7 +52,7 @@ tap.test('task worker', async (t) => {
     worker.start();
     t.teardown(() => worker.stop());
 
-    const insertTask: InsertTask = createInserTask(
+    const insertTask: InsertTask = createInsertTask(
       {
         task_name: 'happy-task',
         queue: queue,
@@ -244,7 +244,7 @@ tap.test('task worker', async (t) => {
     worker.start();
     t.teardown(() => worker.stop());
 
-    const insertTask: InsertTask = createInserTask(
+    const insertTask: InsertTask = createInsertTask(
       {
         task_name: 'task',
         data: {},
@@ -300,7 +300,7 @@ tap.test('task worker', async (t) => {
 
     const taskName = 'expired-task';
 
-    const insertTask: InsertTask = createInserTask(
+    const insertTask: InsertTask = createInsertTask(
       {
         task_name: taskName,
         data: {},
@@ -374,7 +374,7 @@ tap.test('maintaince worker', async (t) => {
       data: {},
     });
 
-    const insertTask = createInserTask(outgoingTask, { type: 'direct' }, 120);
+    const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 120);
 
     await query(sqlPool, plans.createTasks([insertTask]));
 
@@ -409,7 +409,7 @@ tap.test('maintaince worker', async (t) => {
       data: {},
     });
 
-    const insertTask = createInserTask(outgoingTask, { type: 'direct' }, 0);
+    const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 0);
 
     t.equal(insertTask.kis, 0);
     t.equal(insertTask.saf, 0);

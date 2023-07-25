@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'docs/**'
+      - 'example/**'
+      - '*.md'
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
@@ -12,7 +16,7 @@ jobs:
     uses: ./.github/workflows/test.yml
   release:
     name: Release
-    if: github.repository == 'ilijaNL/task-boss-non-existing'
+    if: github.repository == 'ilijaNL/task-boss'
     needs: test
     runs-on: ubuntu-latest
     permissions:

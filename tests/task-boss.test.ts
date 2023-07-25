@@ -190,7 +190,6 @@ tap.test('task-boss', async (tap) => {
     const taskBoss = createTaskBoss(queue, {
       handlerConfig: {
         retryDelay: 212,
-        singletonKey: 'bla',
       },
     });
 
@@ -200,6 +199,7 @@ tap.test('task-boss', async (tap) => {
       config: {
         expireInSeconds: 5,
         startAfterSeconds: 45,
+        singletonKey: 'bla',
       },
     });
 

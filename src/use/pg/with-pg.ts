@@ -3,7 +3,7 @@ import { BaseClient, TaskBoss } from '../../task-boss';
 import { TEvent, Task } from '../../definitions';
 import { QueryCommand, query, withTransaction } from './sql';
 import { migrate } from './migrations';
-import { InsertTask, createPlans, createInserTask } from './plans';
+import { InsertTask, createPlans, createInsertTask } from './plans';
 import { createMaintainceWorker } from './maintaince';
 import { createBaseWorker } from '../../worker';
 import { createTaskWorker } from './task';
@@ -141,7 +141,7 @@ export const withPG = (
 
           agg.push(
             ...tasks.map<InsertTask>((task) =>
-              createInserTask(
+              createInsertTask(
                 task,
                 {
                   type: 'event',
@@ -193,7 +193,7 @@ export const withPG = (
       tasks.map<InsertTask>((_task) => {
         const task = taskBoss.getTask(_task);
 
-        return createInserTask(task, directTask, keepInSeconds);
+        return createInsertTask(task, directTask, keepInSeconds);
       })
     );
   }

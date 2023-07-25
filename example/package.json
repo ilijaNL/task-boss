@@ -1,0 +1,21 @@
+{
+  "name": "taskboss-example",
+  "private": true,
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "tsx ./src/pg.ts"
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "tsx": "^3.12.7",
+    "typescript": "^5.1.6"
+  },
+  "dependencies": {
+    "close-with-grace": "^1.2.0",
+    "pg": "^8.11.1",
+    "task-boss": "file:.."
+  }
+}
