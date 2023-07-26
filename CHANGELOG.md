@@ -1,5 +1,11 @@
 # task-boss
 
+## 0.0.3
+
+### Patch Changes
+
+- Expose plans for pg
+
 ## 0.0.2
 
 ### Patch Changes
