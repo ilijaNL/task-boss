@@ -1,5 +1,11 @@
 # task-boss
 
+## 0.0.4
+
+### Patch Changes
+
+- Add ponyfill for fetch API
+
 ## 0.0.3
 
 ### Patch Changes
