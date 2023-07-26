@@ -3,6 +3,7 @@ import createTaskBoss, { IncomingEvent } from '../../../src/task-boss';
 import withHandler, { IncomingRemoteEvent, IncomingRemoteTask, RemoteTask } from '../../../src/use/webhook';
 import { TEvent, defineEvent, defineTask } from '../../../src/definitions';
 import { Type } from '@sinclair/typebox';
+import { Request } from '@whatwg-node/fetch';
 
 function createEventRequest(data: IncomingRemoteEvent) {
   return new Request('http://test.localhost', {

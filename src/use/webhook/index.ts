@@ -1,6 +1,7 @@
 import { TEvent, Task, TaskTrigger } from '../../definitions';
-import { BaseClient, OutgoingTask, TaskBoss, TaskState } from '../../task-boss';
+import { BaseClient, OutgoingTask, TaskBoss } from '../../task-boss';
 import { mapCompletionDataArg } from '../../utils';
+import { Response } from '@whatwg-node/fetch';
 
 export type TaskDTO<T> = { tn: string; data: T; trace: TaskTrigger };
 
@@ -31,10 +32,6 @@ export type RemoteTask<T = object> = {
    * Data
    */
   d: TaskDTO<T>;
-  /**
-   * Task state
-   */
-  s?: TaskState;
   /**
    * Retry limit
    */
