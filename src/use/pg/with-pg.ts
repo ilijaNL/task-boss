@@ -7,7 +7,7 @@ import { InsertTask, createPlans, createInsertTask } from './plans';
 import { createMaintainceWorker } from './maintaince';
 import { createBaseWorker } from '../../worker';
 import { createTaskWorker } from './task';
-import { debounce } from '../../utils';
+import { DeferredPromise, debounce } from '../../utils';
 
 export type WorkerConfig = {
   /**
@@ -112,14 +112,31 @@ export const withPG = (
     poolInternvalInMs: workerConfig.intervalInMs,
     refillThresholdPct: workerConfig.refillFactor,
     plans: sqlPlans,
-    async handler({ data: { data, tn, trace }, expire_in_seconds, retrycount, id }) {
-      return taskBoss.handle(data, {
-        expire_in_seconds: expire_in_seconds,
-        id: id,
-        retried: retrycount,
-        task_name: tn,
-        trigger: trace,
-      });
+    async handler({ data: { data, tn, trace }, expire_in_seconds, retrycount, id }): Promise<any> {
+      const future = new DeferredPromise();
+
+      taskBoss
+        .handle(data, {
+          expire_in_seconds: expire_in_seconds,
+          id: id,
+          retried: retrycount,
+          task_name: tn,
+          trigger: trace,
+          fail(data) {
+            future.reject(data);
+          },
+          resolve(data) {
+            future.resolve(data);
+          },
+        })
+        .then((data) => {
+          future.resolve(data);
+        })
+        .catch((e) => {
+          future.reject(e);
+        });
+
+      return future.promise;
     },
   });
 
@@ -227,6 +244,7 @@ export const withPG = (
       }
 
       state.started = true;
+      state.stopped = false;
 
       await migrate(pool, schema);
 
@@ -247,6 +265,8 @@ export const withPG = (
       await Promise.all([fanoutWorker.stop(), maintainceWorker.stop(), tWorker.stop()]);
 
       await cleanupDB();
+      // only allow to start when fully stopped
+      state.started = false;
     },
   };
 };

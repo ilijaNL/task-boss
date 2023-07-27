@@ -22,7 +22,19 @@ tap.test('task-boss', async (tap) => {
     await t.rejects(() =>
       taskBoss.handle(
         {},
-        { expire_in_seconds: 12, id: '123', task_name: 'test', retried: 0, trigger: { type: 'direct' } }
+        {
+          expire_in_seconds: 12,
+          id: '123',
+          task_name: 'test',
+          retried: 0,
+          trigger: { type: 'direct' },
+          fail(data) {
+            //
+          },
+          resolve(data) {
+            //
+          },
+        }
       )
     );
   });
@@ -45,7 +57,19 @@ tap.test('task-boss', async (tap) => {
     await t.rejects(() =>
       taskBoss.handle(
         {},
-        { expire_in_seconds: 0.1, id: '123', retried: 0, task_name: 'test', trigger: { type: 'direct' } }
+        {
+          expire_in_seconds: 0.1,
+          id: '123',
+          retried: 0,
+          task_name: 'test',
+          trigger: { type: 'direct' },
+          fail(data) {
+            //
+          },
+          resolve(data) {
+            //
+          },
+        }
       )
     );
   });
@@ -80,6 +104,12 @@ tap.test('task-boss', async (tap) => {
         retried: 0,
         task_name: 'test',
         trigger: { type: 'direct' },
+        fail(data) {
+          //
+        },
+        resolve(data) {
+          //
+        },
       }
     );
 
