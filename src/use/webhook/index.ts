@@ -157,12 +157,12 @@ export type IncomingRemoteTask = {
 
 export const withHandler = (
   taskBoss: TaskBoss,
-  service: WebhookService,
   options: {
+    service: WebhookService;
     sign_secret: string | null;
   }
 ): HandlerClient => {
-  const client = withWebhook(taskBoss, service);
+  const client = withWebhook(taskBoss, options.service);
 
   /**
    * Body is a json, which should contain {t: true, b: IncomingRemoteTask for task or { e: true, b: IncomingRemoteEvent } for event.

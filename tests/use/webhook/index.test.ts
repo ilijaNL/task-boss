@@ -10,7 +10,6 @@ function createEventRequest(data: IncomingRemoteEvent) {
   return new Request('http://test.localhost', {
     method: 'POST',
     headers: {
-      'x-remote-secret': '123',
       'content-type': 'application/json',
     },
     body: Buffer.from(
@@ -41,16 +40,13 @@ function createTaskRequest(data: IncomingRemoteTask) {
 tap.test('happy path', async (t) => {
   const tb = createTaskBoss('smoke_test');
 
-  const withH = withHandler(
-    tb,
-    {
+  const withH = withHandler(tb, {
+    sign_secret: null,
+    service: {
       async submitEvents(events) {},
       async submitTasks(tasks) {},
     },
-    {
-      sign_secret: null,
-    }
-  );
+  });
 
   const ie: IncomingEvent = {
     event_data: {},
@@ -79,16 +75,13 @@ tap.test('happy path with signature', async (t) => {
   const tb = createTaskBoss('smoke_test');
   const sign_secret = 'signature-secret';
 
-  const withH = withHandler(
-    tb,
-    {
+  const withH = withHandler(tb, {
+    sign_secret: sign_secret,
+    service: {
       async submitEvents(events) {},
       async submitTasks(tasks) {},
     },
-    {
-      sign_secret: sign_secret,
-    }
-  );
+  });
 
   const ie: IncomingEvent = {
     event_data: {},
@@ -128,6 +121,7 @@ tap.test('happy path with signature', async (t) => {
     });
 
     const res2 = await withH.handle(req2);
+
     t.equal(res2.status, 200);
     t.equal(await res2.json(), null);
   }
@@ -156,19 +150,16 @@ tap.test('publish event', async (t) => {
     data: '123',
     event_name: 'name',
   };
-  const htb = withHandler(
-    tb,
-    {
+  const htb = withHandler(tb, {
+    sign_secret: null,
+    service: {
       async submitEvents(events) {
         t.equal(events[0]!.d, event.data);
         t.equal(events[0]!.e, event.event_name);
       },
       async submitTasks() {},
     },
-    {
-      sign_secret: null,
-    }
-  );
+  });
 
   await htb.publish(event);
 });
@@ -176,16 +167,13 @@ tap.test('publish event', async (t) => {
 tap.test('throws wrong payload', async (t) => {
   const tb = createTaskBoss('smoke_test');
 
-  const withH = withHandler(
-    tb,
-    {
+  const withH = withHandler(tb, {
+    sign_secret: null,
+    service: {
       async submitEvents() {},
       async submitTasks() {},
     },
-    {
-      sign_secret: null,
-    }
-  );
+  });
 
   const ie: IncomingEvent = {
     event_data: {},
@@ -235,9 +223,9 @@ tap.test('on new task', async (tap) => {
     },
   });
 
-  const handlerBoss = withHandler(
-    tb,
-    {
+  const handlerBoss = withHandler(tb, {
+    sign_secret: null,
+    service: {
       async submitTasks(tasks) {
         tap.fail('should not call');
         //
@@ -247,10 +235,7 @@ tap.test('on new task', async (tap) => {
         //
       },
     },
-    {
-      sign_secret: null,
-    }
-  );
+  });
 
   const taskReq = createTaskRequest({
     es: 10,
@@ -286,9 +271,9 @@ tap.test('on new task throws', async (tap) => {
     },
   });
 
-  const handlerBoss = withHandler(
-    tb,
-    {
+  const handlerBoss = withHandler(tb, {
+    sign_secret: null,
+    service: {
       async submitTasks(tasks) {
         tap.fail('should not call');
       },
@@ -296,10 +281,7 @@ tap.test('on new task throws', async (tap) => {
         tap.fail('should not call');
       },
     },
-    {
-      sign_secret: null,
-    }
-  );
+  });
 
   const taskReq = createTaskRequest({
     es: 10,
@@ -327,9 +309,9 @@ tap.test('submit tasks', async (tap) => {
   });
   let sent = 0;
 
-  const instance = withHandler(
-    tb,
-    {
+  const instance = withHandler(tb, {
+    sign_secret: null,
+    service: {
       async submitEvents() {},
       async submitTasks(tasks) {
         tasks.forEach((t) => {
@@ -338,10 +320,7 @@ tap.test('submit tasks', async (tap) => {
         });
       },
     },
-    {
-      sign_secret: null,
-    }
-  );
+  });
 
   await instance.send(taskDef.from({ works: 'abcd' }), taskDef.from({ works: 'abcd' }));
 
@@ -391,18 +370,15 @@ tap.test('submit tasks on event', async (tap) => {
 
   const submittedTasks: RemoteTask<any>[] = [];
 
-  const pgTasks = withHandler(
-    tb,
-    {
+  const pgTasks = withHandler(tb, {
+    sign_secret: null,
+    service: {
       async submitEvents() {},
       async submitTasks(tasks) {
         submittedTasks.push(...tasks);
       },
     },
-    {
-      sign_secret: null,
-    }
-  );
+  });
 
   const ie1: IncomingRemoteEvent = {
     d: event1.from({ text: 'abc ' }).data,
