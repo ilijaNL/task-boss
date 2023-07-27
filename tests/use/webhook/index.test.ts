@@ -1,15 +1,15 @@
 import tap from 'tap';
-import createTaskBoss, { IncomingEvent } from '../../../src/task-boss';
+import createTaskBoss, { IncomingEvent } from '../../../src';
 import withHandler, { IncomingRemoteEvent, IncomingRemoteTask, RemoteTask } from '../../../src/use/webhook';
-import { TEvent, defineEvent, defineTask } from '../../../src/definitions';
+import { TEvent, defineEvent, defineTask } from '../../../src';
 import { Type } from '@sinclair/typebox';
 import { Request } from '@whatwg-node/fetch';
+import { getHMAC } from '../../../src/use/webhook/crypto';
 
 function createEventRequest(data: IncomingRemoteEvent) {
   return new Request('http://test.localhost', {
     method: 'POST',
     headers: {
-      'x-remote-secret': '123',
       'content-type': 'application/json',
     },
     body: Buffer.from(
@@ -41,8 +41,11 @@ tap.test('happy path', async (t) => {
   const tb = createTaskBoss('smoke_test');
 
   const withH = withHandler(tb, {
-    async submitEvents(events) {},
-    async submitTasks(tasks) {},
+    sign_secret: null,
+    service: {
+      async submitEvents(events) {},
+      async submitTasks(tasks) {},
+    },
   });
 
   const ie: IncomingEvent = {
@@ -68,6 +71,78 @@ tap.test('happy path', async (t) => {
   t.resolves(withH.handle(req));
 });
 
+tap.test('happy path with signature', async (t) => {
+  const tb = createTaskBoss('smoke_test');
+  const sign_secret = 'signature-secret';
+
+  const withH = withHandler(tb, {
+    sign_secret: sign_secret,
+    service: {
+      async submitEvents(events) {},
+      async submitTasks(tasks) {},
+    },
+  });
+
+  const ie: IncomingEvent = {
+    event_data: {},
+    event_name: 'test',
+    id: '123',
+  };
+
+  const payload = JSON.stringify({
+    e: true,
+    b: ie,
+  });
+
+  // no signature
+  {
+    const req1 = new Request('http://test.localhost', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: Buffer.from(payload),
+    });
+
+    const res1 = await withH.handle(req1);
+    t.equal(res1.status, 403);
+    t.equal(await res1.text(), 'forbidden: missing x-body-signature');
+  }
+
+  // correct signature
+  {
+    const req2 = new Request('http://test.localhost', {
+      method: 'POST',
+      headers: {
+        'x-body-signature': await getHMAC(payload, sign_secret, 'SHA-256'),
+        'content-type': 'application/json',
+      },
+      body: Buffer.from(payload),
+    });
+
+    const res2 = await withH.handle(req2);
+
+    t.equal(res2.status, 200);
+    t.equal(await res2.json(), null);
+  }
+
+  // wrong signature
+  {
+    const req = new Request('http://test.localhost', {
+      method: 'POST',
+      headers: {
+        'x-body-signature': await getHMAC(payload, 'abc', 'SHA-256'),
+        'content-type': 'application/json',
+      },
+      body: Buffer.from(payload),
+    });
+
+    const res = await withH.handle(req);
+    t.equal(res.status, 403);
+    t.equal(await res.text(), 'forbidden: invalid signature');
+  }
+});
+
 tap.test('publish event', async (t) => {
   t.plan(2);
   const tb = createTaskBoss('www');
@@ -76,11 +151,14 @@ tap.test('publish event', async (t) => {
     event_name: 'name',
   };
   const htb = withHandler(tb, {
-    async submitEvents(events) {
-      t.equal(events[0]!.d, event.data);
-      t.equal(events[0]!.e, event.event_name);
+    sign_secret: null,
+    service: {
+      async submitEvents(events) {
+        t.equal(events[0]!.d, event.data);
+        t.equal(events[0]!.e, event.event_name);
+      },
+      async submitTasks() {},
     },
-    async submitTasks() {},
   });
 
   await htb.publish(event);
@@ -90,8 +168,11 @@ tap.test('throws wrong payload', async (t) => {
   const tb = createTaskBoss('smoke_test');
 
   const withH = withHandler(tb, {
-    async submitEvents() {},
-    async submitTasks() {},
+    sign_secret: null,
+    service: {
+      async submitEvents() {},
+      async submitTasks() {},
+    },
   });
 
   const ie: IncomingEvent = {
@@ -99,23 +180,6 @@ tap.test('throws wrong payload', async (t) => {
     event_name: 'test',
     id: '123',
   };
-
-  const req1 = new Request('http://test.localhost', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-    },
-    body: Buffer.from(
-      JSON.stringify({
-        e: true,
-        b: ie,
-      })
-    ),
-  });
-
-  const res1 = await withH.handle(req1);
-  t.equal(res1.status, 403);
-  t.equal(await res1.text(), 'forbidden');
 
   const re2 = new Request('http://test.localhost', {
     method: 'POST',
@@ -160,13 +224,16 @@ tap.test('on new task', async (tap) => {
   });
 
   const handlerBoss = withHandler(tb, {
-    async submitTasks(tasks) {
-      tap.fail('should not call');
-      //
-    },
-    async submitEvents(events) {
-      tap.fail('should not call');
-      //
+    sign_secret: null,
+    service: {
+      async submitTasks(tasks) {
+        tap.fail('should not call');
+        //
+      },
+      async submitEvents(events) {
+        tap.fail('should not call');
+        //
+      },
     },
   });
 
@@ -210,13 +277,16 @@ tap.test('on new task resolve', async (tap) => {
   });
 
   const handlerBoss = withHandler(tb, {
-    async submitTasks(tasks) {
-      tap.fail('should not call');
-      //
-    },
-    async submitEvents(events) {
-      tap.fail('should not call');
-      //
+    sign_secret: null,
+    service: {
+      async submitTasks(tasks) {
+        tap.fail('should not call');
+        //
+      },
+      async submitEvents(events) {
+        tap.fail('should not call');
+        //
+      },
     },
   });
 
@@ -255,13 +325,14 @@ tap.test('on new task throws', async (tap) => {
   });
 
   const handlerBoss = withHandler(tb, {
-    async submitTasks(tasks) {
-      tap.fail('should not call');
-      //
-    },
-    async submitEvents(events) {
-      tap.fail('should not call');
-      //
+    sign_secret: null,
+    service: {
+      async submitTasks(tasks) {
+        tap.fail('should not call');
+      },
+      async submitEvents(events) {
+        tap.fail('should not call');
+      },
     },
   });
 
@@ -303,13 +374,16 @@ tap.test('on new task fails', async (tap) => {
   });
 
   const handlerBoss = withHandler(tb, {
-    async submitTasks(tasks) {
-      tap.fail('should not call');
-      //
-    },
-    async submitEvents(events) {
-      tap.fail('should not call');
-      //
+    sign_secret: null,
+    service: {
+      async submitTasks(tasks) {
+        tap.fail('should not call');
+        //
+      },
+      async submitEvents(events) {
+        tap.fail('should not call');
+        //
+      },
     },
   });
 
@@ -340,12 +414,15 @@ tap.test('submit tasks', async (tap) => {
   let sent = 0;
 
   const instance = withHandler(tb, {
-    async submitEvents() {},
-    async submitTasks(tasks) {
-      tasks.forEach((t) => {
-        tap.equal(t.q, queue);
-        sent += 1;
-      });
+    sign_secret: null,
+    service: {
+      async submitEvents() {},
+      async submitTasks(tasks) {
+        tasks.forEach((t) => {
+          tap.equal(t.q, queue);
+          sent += 1;
+        });
+      },
     },
   });
 
@@ -398,11 +475,12 @@ tap.test('submit tasks on event', async (tap) => {
   const submittedTasks: RemoteTask<any>[] = [];
 
   const pgTasks = withHandler(tb, {
-    async submitEvents(events) {
-      //
-    },
-    async submitTasks(tasks) {
-      submittedTasks.push(...tasks);
+    sign_secret: null,
+    service: {
+      async submitEvents() {},
+      async submitTasks(tasks) {
+        submittedTasks.push(...tasks);
+      },
     },
   });
 
