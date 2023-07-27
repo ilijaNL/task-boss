@@ -277,13 +277,16 @@ tap.test('on new task resolve', async (tap) => {
   });
 
   const handlerBoss = withHandler(tb, {
-    async submitTasks(tasks) {
-      tap.fail('should not call');
-      //
-    },
-    async submitEvents(events) {
-      tap.fail('should not call');
-      //
+    sign_secret: null,
+    service: {
+      async submitTasks(tasks) {
+        tap.fail('should not call');
+        //
+      },
+      async submitEvents(events) {
+        tap.fail('should not call');
+        //
+      },
     },
   });
 
@@ -371,13 +374,16 @@ tap.test('on new task fails', async (tap) => {
   });
 
   const handlerBoss = withHandler(tb, {
-    async submitTasks(tasks) {
-      tap.fail('should not call');
-      //
-    },
-    async submitEvents(events) {
-      tap.fail('should not call');
-      //
+    sign_secret: null,
+    service: {
+      async submitTasks(tasks) {
+        tap.fail('should not call');
+        //
+      },
+      async submitEvents(events) {
+        tap.fail('should not call');
+        //
+      },
     },
   });
 
