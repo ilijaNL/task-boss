@@ -1,5 +1,11 @@
 # task-boss
 
+## 0.0.5
+
+### Patch Changes
+
+- Ability to fail or resolve handler from a function
+
 ## 0.0.4
 
 ### Patch Changes
