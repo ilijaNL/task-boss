@@ -120,16 +120,18 @@ export interface Task<Data = {}> {
 }
 
 // export type IncomingTask<Input> = { task_name: string; input: Input; trigger: TaskTrigger; expire_in_seconds: number };
-export type IncomingTaskMetaData = {
+export type TaskHandlerCtx<Res> = {
   id: string;
   expire_in_seconds: number;
   task_name: string;
   trigger: TaskTrigger;
   retried: number;
+  fail: (reason?: any) => void;
+  resolve: (data: Res) => void;
 };
 
 export interface TaskHandler<Input, Res = any> {
-  (data: Input, meta_data: IncomingTaskMetaData): Promise<Res>;
+  (data: Input, ctx: TaskHandlerCtx<Res>): Promise<Res>;
 }
 
 export const defaultTaskConfig: TaskConfig = {
