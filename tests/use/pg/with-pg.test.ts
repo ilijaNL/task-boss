@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { withPG } from '../../../src/use/pg';
+import { PGTaskBoss, withPG } from '../../../src/use/pg';
 import { cleanupSchema, createRandomSchema } from './helpers';
 import tap from 'tap';
 import { createTaskBoss } from '../../../src';
@@ -9,6 +9,60 @@ import { Type } from '@sinclair/typebox';
 import { resolveWithinSeconds } from '../../../src/utils';
 
 const connectionString = process.env.PG ?? 'postgres://postgres:postgres@localhost:5432/app';
+
+tap.test('concurrency start', async (tap) => {
+  const schema = createRandomSchema();
+  const sqlPool = new Pool({
+    connectionString: connectionString,
+    max: 4,
+  });
+
+  // create some tasks
+  const taskDef = defineTask({
+    schema: Type.Object({}),
+    task_name: 'task1',
+  });
+
+  const ee = new EventEmitter();
+  let called = 0;
+
+  const taskBoss = createTaskBoss('smoke_test');
+
+  taskBoss.registerTask(taskDef, {
+    async handler() {
+      called += 1;
+
+      if (called === 2) {
+        ee.emit('complete');
+      }
+      return 'ok';
+    },
+  });
+
+  const clients = [
+    withPG(taskBoss, { db: sqlPool, schema: schema }),
+    withPG(taskBoss, { db: sqlPool, schema: schema }),
+    withPG(taskBoss, { db: sqlPool, schema: schema }),
+  ] as const;
+
+  // apply mgirations
+  await clients[0].start();
+  // apply mgirations
+  await clients[0].stop();
+
+  await clients[0].send(taskDef.from({}), taskDef.from({}));
+
+  tap.teardown(async () => {
+    await Promise.all(clients.map((c) => c.stop()));
+    await cleanupSchema(sqlPool, schema);
+    await sqlPool.end();
+  });
+
+  const prm = once(ee, 'complete');
+  await Promise.all(clients.map((c) => c.start()));
+  await prm;
+});
+
 tap.test('with-pg', async (tap) => {
   tap.jobs = 5;
   const schema = createRandomSchema();
@@ -79,7 +133,60 @@ tap.test('with-pg', async (tap) => {
     });
   });
 
-  tap.test('stores error as result on task handler error', async ({ teardown, equal }) => {
+  tap.test('emit tasks with resolve', async ({ teardown, equal, same }) => {
+    const ee = new EventEmitter();
+    const queue = 'emit_tasks_result_resolve';
+    const tb = createTaskBoss(queue);
+
+    const task_name = 'emit_task_resolve';
+    const taskDef = defineTask({
+      task_name: task_name,
+      schema: Type.Object({ works: Type.String() }),
+    });
+    let handled = 0;
+
+    tb.registerTask(taskDef, {
+      handler: async (input, { trigger, resolve }) => {
+        handled += 1;
+        equal(input.works, 'abcd');
+        equal(trigger.type, 'direct');
+        if (handled > 1) {
+          ee.emit('handled');
+        }
+
+        resolve({
+          success: 'with resolve result',
+        });
+
+        return {
+          success: 'with result',
+        };
+      },
+    });
+
+    const pgTasks = withPG(tb, { db: sqlPool, schema: schema });
+
+    await pgTasks.start();
+
+    teardown(() => pgTasks.stop());
+
+    const waitProm = once(ee, 'handled');
+
+    await pgTasks.send(taskDef.from({ works: 'abcd' }), taskDef.from({ works: 'abcd' }));
+    await waitProm;
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const result = await sqlPool
+      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${task_name}'`)
+      .then((r) => r.rows[0]!);
+
+    same(result.output, {
+      success: 'with resolve result',
+    });
+  });
+
+  tap.test('stores error as result on task handler throw', async ({ teardown, equal, ok }) => {
     const ee = new EventEmitter();
     const queue = 'emit_tasks_error';
     const tb = createTaskBoss(queue);
@@ -114,6 +221,49 @@ tap.test('with-pg', async (tap) => {
       .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${task_name}'`)
       .then((r) => r.rows[0]!);
     equal(result.output.message, 'expected-error');
+
+    ok(!!result.output.stack);
+  });
+
+  tap.test('fail manually', async ({ teardown, same }) => {
+    const ee = new EventEmitter();
+    const queue = 'emit_tasks_error_fail';
+    const tb = createTaskBoss(queue);
+
+    const task_name = 'emit_task_fail';
+    const taskDef = defineTask({
+      task_name: task_name,
+      schema: Type.Object({ works: Type.String() }),
+    });
+
+    tb.registerTask(taskDef, {
+      handler: async (_input, { fail }) => {
+        ee.emit('handled');
+        fail({ custom_payload: 123 });
+
+        throw new Error('bla');
+      },
+    });
+
+    const pgTasks = withPG(tb, { db: sqlPool, schema: schema });
+
+    await pgTasks.start();
+
+    teardown(() => pgTasks.stop());
+
+    const waitProm = once(ee, 'handled');
+
+    await pgTasks.send(taskDef.from({ works: 'abcd' }));
+    await waitProm;
+
+    // this ensures that the batch is flushed
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const result = await sqlPool
+      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${task_name}'`)
+      .then((r) => r.rows[0]!);
+
+    same(result.output, { custom_payload: 123 });
   });
 
   tap.test('emit event', async (t) => {

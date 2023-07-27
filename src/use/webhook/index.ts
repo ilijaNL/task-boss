@@ -1,6 +1,6 @@
 import { TEvent, Task, TaskTrigger } from '../../definitions';
 import { BaseClient, OutgoingTask, TaskBoss } from '../../task-boss';
-import { mapCompletionDataArg } from '../../utils';
+import { DeferredPromise, mapCompletionDataArg } from '../../utils';
 import { Response } from '@whatwg-node/fetch';
 
 export type TaskDTO<T> = { tn: string; data: T; trace: TaskTrigger };
@@ -102,14 +102,31 @@ const withWebhook = (taskBoss: TaskBoss, remote: WebhookService) => {
 
       return remote.submitTasks(remoteTasks);
     },
-    async onTask(task: IncomingRemoteTask) {
-      return taskBoss.handle(task.d, {
-        expire_in_seconds: task.es,
-        id: task.id,
-        retried: task.r,
-        task_name: task.tn,
-        trigger: task.tr,
-      });
+    async onTask(task: IncomingRemoteTask): Promise<any> {
+      const future = new DeferredPromise();
+
+      taskBoss
+        .handle(task.d, {
+          expire_in_seconds: task.es,
+          id: task.id,
+          retried: task.r,
+          task_name: task.tn,
+          trigger: task.tr,
+          fail(data) {
+            future.reject(data);
+          },
+          resolve(data) {
+            future.resolve(data);
+          },
+        })
+        .then((data) => {
+          future.resolve(data);
+        })
+        .catch((e) => {
+          future.reject(e);
+        });
+
+      return future.promise;
     },
   };
 };

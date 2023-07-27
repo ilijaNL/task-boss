@@ -75,3 +75,34 @@ export function mapCompletionDataArg(data: any) {
 
   return replaceErrors(result);
 }
+
+export class DeferredPromise<T = unknown> {
+  private _resolve: null | ((value: T) => void) = null;
+  private _reject: null | ((reason?: any) => void) = null;
+  private _settled: boolean = false;
+  public promise: Promise<T>;
+
+  constructor() {
+    this.promise = new Promise<T>((resolve, reject) => {
+      this._reject = reject;
+      this._resolve = resolve;
+    });
+  }
+
+  public resolve(value: T) {
+    if (this._settled) {
+      return;
+    }
+
+    this._settled = true;
+    this._resolve?.(value);
+  }
+
+  public reject(reason?: any) {
+    if (this._settled) {
+      return;
+    }
+    this._settled = true;
+    this._reject?.(reason);
+  }
+}
