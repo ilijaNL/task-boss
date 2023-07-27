@@ -2,6 +2,7 @@ import { TEvent, Task, TaskTrigger } from '../../definitions';
 import { BaseClient, OutgoingTask, TaskBoss } from '../../task-boss';
 import { mapCompletionDataArg } from '../../utils';
 import { Response } from '@whatwg-node/fetch';
+import { generateRandomSecretKey, getHMAC, webTimingSafeEqual } from './crypto';
 
 export type TaskDTO<T> = { tn: string; data: T; trace: TaskTrigger };
 
@@ -154,28 +155,52 @@ export type IncomingRemoteTask = {
   tr: TaskTrigger;
 };
 
-export const withHandler = (taskBoss: TaskBoss, service: WebhookService): HandlerClient => {
+export const withHandler = (
+  taskBoss: TaskBoss,
+  service: WebhookService,
+  options: {
+    sign_secret: string | null;
+  }
+): HandlerClient => {
   const client = withWebhook(taskBoss, service);
 
   /**
    * Body is a json, which should contain {t: true, b: IncomingRemoteTask for task or { e: true, b: IncomingRemoteEvent } for event.
-   * also should contain x-remote-secret to validate that the request is coming from valid resource
-   * TODO: improve the security of this
    */
   async function handle(req: Request) {
-    const header = req.headers.get('x-remote-secret');
-
-    if (!header) {
-      return new Response('forbidden', {
-        status: 403,
-      });
-    }
-
-    // TODO: we need to validate that it comes from valid source
-
     try {
-      // parse
-      const parsed = await req.json();
+      let body;
+
+      if (options.sign_secret === null) {
+        body = await req.text();
+      }
+
+      if (options.sign_secret !== null) {
+        const expectedSignature = req.headers.get('x-body-signature');
+
+        if (!expectedSignature) {
+          return new Response('forbidden: missing x-body-signature', {
+            status: 403,
+          });
+        }
+
+        body = await req.text();
+
+        // calculate the signature from the body
+        const [randomSecretForTimingAttack, bodySignature] = await Promise.all([
+          generateRandomSecretKey(),
+          getHMAC(body, options.sign_secret, 'SHA-256'),
+        ]);
+        const verified = await webTimingSafeEqual(randomSecretForTimingAttack, expectedSignature, bodySignature);
+
+        if (!verified) {
+          return new Response('forbidden: invalid signature', {
+            status: 403,
+          });
+        }
+      }
+
+      const parsed = JSON.parse(body as string);
 
       let res;
       if (parsed.t === true) {
@@ -188,7 +213,7 @@ export const withHandler = (taskBoss: TaskBoss, service: WebhookService): Handle
         throw new Error('unknown body');
       }
 
-      return new Response(res ? JSON.stringify(mapCompletionDataArg(res)) : 'ok', {
+      return new Response(JSON.stringify(mapCompletionDataArg(res)), {
         headers: {
           'content-type': 'application/json',
         },
