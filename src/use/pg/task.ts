@@ -1,10 +1,19 @@
 import { createBaseWorker } from '../../worker';
 import { PGClient, query } from './sql';
 import { createBatcher } from 'node-batcher';
-import { SQLPlans, SelectTask } from './plans';
+import { ResolvedTask, SQLPlans, SelectTask, TASK_STATES, TaskState } from './plans';
 import { mapCompletionDataArg } from '../../utils';
 
-export type ResolveResponse = { task_id: string; success: boolean; payload: any };
+export function getStartAfter(task: SelectTask, newState: TaskState) {
+  const startAfter =
+    newState === TASK_STATES.retry
+      ? task.config.r_b
+        ? task.config.r_d * Math.pow(2, task.retrycount)
+        : task.config.r_d
+      : undefined;
+
+  return startAfter;
+}
 
 export const createTaskWorker = (props: {
   client: PGClient;
@@ -19,9 +28,9 @@ export const createTaskWorker = (props: {
   // used to determine if we can refetch early
   let hasMoreTasks = false;
 
-  const resolveTaskBatcher = createBatcher<ResolveResponse>({
+  const resolveTaskBatcher = createBatcher<ResolvedTask>({
     async onFlush(batch) {
-      const q = plans.resolveTasks(batch.map(({ data: i }) => ({ p: i.payload, s: i.success, t: i.task_id })));
+      const q = plans.resolveTasks(batch.map(({ data: i }) => i));
       await query(client, q);
     },
     // dont make to big since payload can be big
@@ -31,8 +40,18 @@ export const createTaskWorker = (props: {
   });
 
   function resolveTask(task: SelectTask, err: any, result?: any) {
+    // calculate new state
+    // calculate new state
+    const newState =
+      err === null
+        ? TASK_STATES.completed
+        : task.retrycount >= task.config.r_l
+        ? TASK_STATES.failed
+        : TASK_STATES.retry;
+    const startAfter = getStartAfter(task, newState);
+
     // if this throws, something went really wrong
-    resolveTaskBatcher.add({ payload: mapCompletionDataArg(err ?? result), success: !err, task_id: task.id });
+    resolveTaskBatcher.add({ out: mapCompletionDataArg(err ?? result), s: newState, id: task.id, saf: startAfter });
 
     activeTasks.delete(task.id);
 
@@ -50,7 +69,7 @@ export const createTaskWorker = (props: {
       }
 
       const requestedAmount = maxConcurrency - activeTasks.size;
-      const tasks = await query(client, plans.getTasks({ amount: requestedAmount }));
+      const tasks = await query(client, plans.getAndStartTasks({ amount: requestedAmount }));
 
       // high chance that there are more tasks when requested amount is same as fetched
       hasMoreTasks = tasks.length === requestedAmount;

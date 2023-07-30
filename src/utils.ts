@@ -2,6 +2,16 @@ import delay from 'delay';
 
 export type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
+export type JsonArray = JsonValue[];
+
+export type JsonObject = {
+  [K in string]?: JsonValue;
+};
+
+export type JsonPrimitive = boolean | null | number | string;
+
+export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
+
 export const debounce = <Args extends any[], F extends (...args: Args) => any>(
   fn: F,
   opts: { ms: number; maxMs: number }

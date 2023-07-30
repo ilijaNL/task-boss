@@ -24,6 +24,8 @@ export type QueryCommand<Result> = {
   __result?: Result;
 };
 
+export type SchemaSQL = ReturnType<typeof createSql>;
+
 /**
  * Helper function to convert string literal to parameterized postgres query
  */

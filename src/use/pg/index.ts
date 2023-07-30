@@ -4,7 +4,6 @@ export {
   type InsertEvent,
   type InsertTask,
   createInsertTask,
-  type TaskDTO,
   //
   createPlans,
 } from './plans';

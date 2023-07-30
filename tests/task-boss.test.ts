@@ -94,8 +94,6 @@ tap.test('task-boss', async (tap) => {
       },
     });
 
-    const eventData = event.from({});
-
     const result = await taskBoss.handle(
       {},
       {
