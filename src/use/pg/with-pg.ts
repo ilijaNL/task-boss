@@ -154,11 +154,7 @@ export const withPG = (
         const newCursor = +events[events.length - 1]!.position;
 
         const insertTasks = events.reduce((agg, event) => {
-          const tasks = taskBoss.toTasks({
-            event_data: event.event_data,
-            event_name: event.event_name,
-            id: event.id,
-          });
+          const tasks = taskBoss.toTasks(event);
 
           agg.push(
             ...tasks.map<InsertTask>((task) =>
