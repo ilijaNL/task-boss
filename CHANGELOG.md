@@ -1,5 +1,11 @@
 # task-boss
 
+## 0.0.6
+
+### Patch Changes
+
+- ee940a3: Add hmac to webhook
+
 ## 0.0.5
 
 ### Patch Changes
