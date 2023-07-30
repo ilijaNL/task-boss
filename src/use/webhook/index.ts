@@ -1,6 +1,6 @@
 import { TEvent, Task, TaskTrigger } from '../../definitions';
 import { BaseClient, OutgoingTask, TaskBoss } from '../../task-boss';
-import { DeferredPromise, mapCompletionDataArg } from '../../utils';
+import { DeferredPromise, JsonValue, mapCompletionDataArg } from '../../utils';
 import { Response } from '@whatwg-node/fetch';
 import { generateRandomSecretKey, getHMAC, webTimingSafeEqual } from './crypto';
 
@@ -24,7 +24,7 @@ export type RemoteEvent = {
 /**
  * Task that is send to the webhook service
  */
-export type RemoteTask<T = object> = {
+export type RemoteTask<T = JsonValue> = {
   /**
    * Queue
    */

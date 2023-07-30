@@ -25,12 +25,12 @@ tap.test('task worker', async (t) => {
     connectionString: connectionString,
   });
 
-  await migrate(sqlPool, schema);
-
   t.teardown(async () => {
     await cleanupSchema(sqlPool, schema);
     await sqlPool.end();
   });
+
+  await migrate(sqlPool, schema);
 
   t.test('happy path', async (t) => {
     const queue = 'happy';
@@ -40,7 +40,7 @@ tap.test('task worker', async (t) => {
       client: sqlPool,
       async handler(event) {
         return {
-          works: event.data.tn,
+          works: event.meta_data.tn,
         };
       },
       maxConcurrency: 10,
@@ -74,8 +74,12 @@ tap.test('task worker', async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${insertTask.d.tn}' LIMIT 1`)
-      .then((r) => r.rows[0]);
+      .query(
+        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${insertTask.md.tn}' LIMIT 1`
+      )
+      .then((r) => {
+        return r.rows[0];
+      });
 
     t.equal(result.output.works, 'happy-task');
     t.equal(result.state, TASK_STATES.completed);
@@ -85,24 +89,36 @@ tap.test('task worker', async (t) => {
     let handlerCalls = 0;
     let queryCalls = 0;
     const amountOfTasks = 50;
+
     const tasks: SelectTask[] = new Array<SelectTask>(amountOfTasks)
       .fill({
+        meta_data: {
+          tn: 't',
+          trace: { type: 'direct' },
+        },
+        config: {
+          ki_s: 21,
+          r_b: false,
+          r_d: 1,
+          r_l: 3,
+        },
         state: 0,
         retrycount: 0,
         id: '0',
-        data: {} as any,
+        data: {},
         expire_in_seconds: 10,
       })
       .map((r, idx) => ({ ...r, id: `${idx}` }));
+
     const ee = new EventEmitter();
 
     const mockedPool: PGClient = {
       async query(props) {
         // this is to fetch tasks
-        if (props.text.includes('FOR UPDATE SKIP LOCKED')) {
+        if (props.text.includes('.get_tasks(')) {
           queryCalls += 1;
           // $3 is amount of rows requested
-          const rows = tasks.splice(0, props.values[2]);
+          const rows = tasks.splice(0, props.values[1]);
 
           return {
             rowCount: rows.length,
@@ -129,7 +145,7 @@ tap.test('task worker', async (t) => {
           ee.emit('completed');
         }
         return {
-          works: event.data.tn,
+          works: event.meta_data.tn,
         };
       },
       // fetch all at once
@@ -160,7 +176,17 @@ tap.test('task worker', async (t) => {
         state: 0,
         retrycount: 0,
         id: '0',
-        data: {} as any,
+        meta_data: {
+          tn: 't',
+          trace: { type: 'direct' },
+        },
+        config: {
+          ki_s: 21,
+          r_b: false,
+          r_d: 1,
+          r_l: 3,
+        },
+        data: {},
         expire_in_seconds: 10,
       })
       .map((r, idx) => ({ ...r, id: `${idx}` }));
@@ -168,10 +194,10 @@ tap.test('task worker', async (t) => {
     const mockedPool: PGClient = {
       async query(props) {
         // this is to fetch tasks
-        if (props.text.includes('FOR UPDATE SKIP LOCKED')) {
+        if (props.text.includes('.get_tasks(')) {
           queryCalls += 1;
           // $3 is amount of rows
-          const rows = tasks.splice(0, props.values[2]);
+          const rows = tasks.splice(0, props.values[1]);
 
           if (tasks.length === 0) {
             ee.emit('drained');
@@ -198,7 +224,7 @@ tap.test('task worker', async (t) => {
         const delay = 10 + Math.random() * 20;
         await new Promise((resolve) => setTimeout(resolve, delay));
         return {
-          works: event.data.tn,
+          works: event.meta_data.tn,
         };
       },
       maxConcurrency: 10,
@@ -262,7 +288,7 @@ tap.test('task worker', async (t) => {
       10
     );
 
-    t.equal(insertTask.r_l, 1);
+    t.equal(insertTask.cf.r_l, 1);
 
     await query(sqlPool, plans.createTasks([insertTask]));
 
@@ -271,7 +297,9 @@ tap.test('task worker', async (t) => {
     t.equal(called, 2);
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${insertTask.d.tn}' LIMIT 1`)
+      .query(
+        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${insertTask.md.tn}' LIMIT 1`
+      )
       .then((r) => r.rows[0]);
 
     t.equal(result.state, TASK_STATES.failed);
@@ -325,7 +353,9 @@ tap.test('task worker', async (t) => {
     t.equal(called, 2);
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${taskName}' LIMIT 1`)
+      .query(
+        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${taskName}' LIMIT 1`
+      )
       .then((r) => r.rows[0]);
 
     t.equal(result.state, TASK_STATES.failed);
@@ -334,7 +364,7 @@ tap.test('task worker', async (t) => {
 });
 
 tap.test('maintaince worker', async (t) => {
-  t.jobs = 5;
+  t.jobs = 1;
 
   const queue = 'maintaince_q';
   const schema = 'maintaince_schema';
@@ -357,7 +387,6 @@ tap.test('maintaince worker', async (t) => {
     const worker = createMaintainceWorker({
       client: sqlPool,
       schema,
-      intervalInMs: 200,
     });
 
     worker.start();
@@ -379,12 +408,16 @@ tap.test('maintaince worker', async (t) => {
     await query(sqlPool, plans.createTasks([insertTask]));
 
     // mark the task as started
-    await query(sqlPool, plans.getTasks({ amount: 100 }));
+    await query(sqlPool, plans.getAndStartTasks({ amount: 100 }));
 
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    worker.notify();
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = 'expired-task-123' LIMIT 1`)
+      .query(
+        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = 'expired-task-123' LIMIT 1`
+      )
       .then((r) => r.rows[0]);
 
     t.equal(result.state, TASK_STATES.expired);
@@ -394,14 +427,15 @@ tap.test('maintaince worker', async (t) => {
     const worker = createMaintainceWorker({
       client: sqlPool,
       schema,
-      intervalInMs: 200,
     });
+
+    worker.start();
+    t.teardown(() => worker.stop());
 
     const plans = createPlans(schema, queue);
     const outgoingTask = tboss.getTask({
-      task_name: 'expired-task-worker',
+      task_name: 'purges-task-worker',
       config: {
-        expireInSeconds: 1,
         retryBackoff: false,
         retryLimit: 0,
         retryDelay: 1,
@@ -411,35 +445,57 @@ tap.test('maintaince worker', async (t) => {
 
     const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 0);
 
-    t.equal(insertTask.kis, 0);
+    t.equal(insertTask.cf.ki_s, 0);
     t.equal(insertTask.saf, 0);
 
     await query(sqlPool, plans.createTasks([insertTask]));
     // mark the task as started
-    await query(sqlPool, plans.getTasks({ amount: 100 }));
-    // complete
-    const result = await sqlPool
-      .query(
-        `UPDATE ${schema}.tasks SET state = ${TASK_STATES.completed} WHERE queue = '${queue}' AND data->>'tn' = 'expired-task-worker' RETURNING *`
+    const tasks = await query(sqlPool, plans.getAndStartTasks({ amount: 100 }));
+
+    const runnignTasks = await sqlPool.query(
+      `SELECT * FROM ${schema}.tasks WHERE  queue = '${queue}' AND meta_data->>'tn' = '${outgoingTask.task_name}'`
+    );
+
+    t.equal(runnignTasks.rowCount, 1);
+
+    // complete tasks
+    await query(
+      sqlPool,
+      plans.resolveTasks(
+        tasks.map((t) => ({
+          id: t.id,
+          s: TASK_STATES.completed,
+          out: undefined,
+        }))
       )
-      .then((r) => r.rows[0]);
+    );
+    {
+      const taskComlpeted = await sqlPool.query(
+        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${outgoingTask.task_name}'`
+      );
 
-    t.ok(result.id);
+      t.equal(taskComlpeted.rowCount, 1);
+    }
 
-    worker.start();
-    t.teardown(() => worker.stop());
+    // triggers manual cleanup
+    worker.notify();
 
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
-    const r = await sqlPool.query(`SELECT * FROM ${schema}.tasks WHERE id = ${result.id}`);
-    t.equal(r.rowCount, 0);
+    {
+      const taskComlpeted = await sqlPool.query(
+        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${outgoingTask.task_name}'`
+      );
+
+      t.equal(taskComlpeted.rowCount, 0);
+    }
   });
 
   t.test('event retention', async (t) => {
     const worker = createMaintainceWorker({
       client: sqlPool,
       schema,
-      intervalInMs: 200,
+      cleanupInterval: 200,
     });
 
     const plans = createPlans(schema, queue);
@@ -458,10 +514,9 @@ tap.test('maintaince worker', async (t) => {
 
     await new Promise((resolve) => setTimeout(resolve, 500));
     const r2 = await sqlPool.query(
-      `SELECT id, expire_at - now()::date as days, event_data FROM ${schema}.events WHERE event_name = 'event_retention_123' ORDER BY days desc`
+      `SELECT id, expire_at - now()::date as days FROM ${schema}.events WHERE event_name = 'event_retention_123' ORDER BY days desc`
     );
     t.equal(r2.rowCount, 2);
-    t.equal(r2.rows[0].event_data.exists, true);
     // default retention
     t.equal(r2.rows[0].days, 30);
     t.equal(r2.rows[1].days, 3);

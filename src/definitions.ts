@@ -1,8 +1,8 @@
 import { Static, TSchema } from '@sinclair/typebox';
-import { Simplify } from './utils';
+import { JsonValue, Simplify } from './utils';
 import { Value } from '@sinclair/typebox/value';
 
-export interface TEvent<Name = string, Data = {}> {
+export interface TEvent<Name = string, Data = JsonValue> {
   event_name: Name;
   data: Data;
 }
@@ -112,7 +112,7 @@ export interface TaskDefinition<T extends TSchema> extends DefineTaskProps<T> {
   from: (input: Static<T>, config?: Partial<TaskConfig>) => Task<Static<T>>;
 }
 
-export interface Task<Data = {}> {
+export interface Task<Data = JsonValue> {
   task_name: string;
   queue?: string;
   data: Data;
@@ -130,7 +130,7 @@ export type TaskHandlerCtx<Res> = {
   resolve: (data: Res) => void;
 };
 
-export interface TaskHandler<Input, Res = any> {
+export interface TaskHandler<Input = JsonValue, Res = any> {
   (data: Input, ctx: TaskHandlerCtx<Res>): Promise<Res>;
 }
 

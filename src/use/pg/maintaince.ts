@@ -1,57 +1,97 @@
+import { Pool, PoolClient } from 'pg';
 import { createBaseWorker } from '../../worker';
-import { TASK_STATES } from './plans';
-import { PGClient, createSql, query } from './sql';
+import { SelectTask, TASK_STATES, createResolveTasksQueryFn } from './plans';
+import { createSql, query, withTransaction } from './sql';
+import { getStartAfter } from './task';
 
 const createPlans = (schema: string) => {
   const sql = createSql(schema);
 
   return {
-    expireTasks: () => sql`
-      UPDATE {{schema}}.tasks
-      SET state = CASE
-          WHEN retryCount < retryLimit THEN ${TASK_STATES.retry}::smallint
-          ELSE ${TASK_STATES.expired}::smallint
-          END,
-        completedOn = CASE
-                      WHEN retryCount < retryLimit
-                      THEN NULL
-                      ELSE now()
-                      END,
-        startAfter = CASE
-                      WHEN retryCount = retryLimit THEN startAfter
-                      WHEN NOT retryBackoff THEN now() + retryDelay * interval '1'
-                      ELSE now() +
-                        (
-                            retryDelay * 2 ^ LEAST(16, retryCount + 1) / 2
-                            +
-                            retryDelay * 2 ^ LEAST(16, retryCount + 1) / 2 * random()
-                        )
-                        * interval '1'
-                      END
-      WHERE state = ${TASK_STATES.active}
-        AND (startedOn + expireIn) < now()
+    resolve_tasks: createResolveTasksQueryFn(sql),
+    get_expired_tasks: (limit: number) => sql<SelectTask>`
+      SELECT
+        id,
+        retryCount,
+        state,
+        data,
+        meta_data,
+        config,
+        (EXTRACT(epoch FROM expireIn))::int as expire_in_seconds
+      FROM {{schema}}.tasks
+        WHERE state = ${TASK_STATES.active}
+          AND (startedOn + expireIn) < now()
+      ORDER BY startedOn ASC
+      LIMIT ${limit}
+      FOR UPDATE SKIP LOCKED
     `,
     purgeTasks: () => sql`
-      DELETE FROM {{schema}}.tasks
-      WHERE state >= ${TASK_STATES.completed} 
+      DELETE FROM {{schema}}.tasks_completed
+      WHERE "state" >= ${TASK_STATES.completed} 
         AND keepUntil < now()
     `,
     deleteOldEvents: () => sql`
-      DELETE FROM {{schema}}.events WHERE expire_at < now()
+      DELETE FROM {{schema}}.events WHERE "expire_at" < now()
     `,
   };
 };
 
-export const createMaintainceWorker = (props: { schema: string; client: PGClient; intervalInMs?: number }) => {
+export const createMaintainceWorker = (props: {
+  schema: string;
+  client: Pool;
+  expireInterval?: number;
+  cleanupInterval?: number;
+}) => {
   const plans = createPlans(props.schema);
-  const worker = createBaseWorker(
+
+  async function expireTasks(client: PoolClient): Promise<boolean> {
+    const limit = 200;
+    // get events that are expired
+    const tasks = await query(client, plans.get_expired_tasks(limit));
+
+    // update
+    await query(
+      client,
+      plans.resolve_tasks(
+        tasks.map((expTask) => {
+          const newState = expTask.retrycount < expTask.config.r_l ? TASK_STATES.retry : TASK_STATES.expired;
+
+          return {
+            id: expTask.id,
+            s: newState,
+            saf: getStartAfter(expTask, newState),
+            out: undefined,
+          };
+        })
+      )
+    );
+
+    return tasks.length === limit;
+  }
+
+  const expireWorker = createBaseWorker(async () => withTransaction(props.client, expireTasks), {
+    loopInterval: props.expireInterval ?? 20000,
+  });
+
+  const cleanupWorker = createBaseWorker(
     async () => {
       await query(props.client, plans.deleteOldEvents());
       await query(props.client, plans.purgeTasks());
-      await query(props.client, plans.expireTasks());
     },
-    { loopInterval: props.intervalInMs || 30000 }
+    { loopInterval: props.cleanupInterval ?? 120000 }
   );
 
-  return worker;
+  return {
+    notify() {
+      expireWorker.notify();
+      cleanupWorker.notify();
+    },
+    async start() {
+      expireWorker.start();
+      cleanupWorker.start();
+    },
+    async stop() {
+      await Promise.all([expireWorker.stop(), cleanupWorker.stop()]);
+    },
+  };
 };

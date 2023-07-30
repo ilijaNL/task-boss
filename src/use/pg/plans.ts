@@ -1,6 +1,7 @@
 import { TaskTrigger } from '../../definitions';
 import { OutgoingTask } from '../../task-boss';
-import { createSql } from './sql';
+import { JsonObject, JsonValue } from '../../utils';
+import { SchemaSQL, createSql } from './sql';
 
 export type TaskName = string;
 
@@ -22,7 +23,7 @@ type SelectEvent = {
    */
   id: string;
   event_name: string;
-  event_data: any;
+  event_data: JsonValue;
   position: string;
 };
 
@@ -34,7 +35,7 @@ export type InsertEvent = {
   /**
    * Data
    */
-  d: Record<string, any>;
+  d: JsonValue;
   /**
    * Retention in days.
    * Defaults to 30 days
@@ -42,33 +43,51 @@ export type InsertEvent = {
   rid?: number;
 };
 
-export type TaskDTO<T> = { tn: string; data: T; trace: TaskTrigger };
+export type MetaData = {
+  tn: string;
+  trace: TaskTrigger;
+} & JsonObject;
 
-export type InsertTask<T = object> = {
+export type InsertTask = {
   /**
    * Queue
    */
   q: string;
   /**
-   * Data
-   */
-  d: TaskDTO<T>;
-  /**
    * Task state
    */
   s?: TaskState;
   /**
-   * Retry limit
+   * Data
    */
-  r_l: number;
+  d: JsonValue;
   /**
-   * Retry delay
+   * Meta data
    */
-  r_d: number;
+  md: MetaData;
+
+  cf: {
+    /**
+     * Retry limit
+     */
+    r_l: number;
+    /**
+     * Retry delay in seconds
+     */
+    r_d: number;
+    /**
+     * Retry backoff
+     */
+    r_b: boolean;
+    /**
+     * Keep in seconds after complete
+     */
+    ki_s: number;
+  };
   /**
-   * Retry backoff
+   * Singleton key
    */
-  r_b: boolean;
+  skey: string | null;
   /**
    * Start after seconds
    */
@@ -77,44 +96,101 @@ export type InsertTask<T = object> = {
    * Expire in seconds
    */
   eis: number;
-  /**
-   * Keep until in seconds
-   */
-  kis: number;
-  /**
-   * Singleton key
-   */
-  skey: string | null;
 };
 
-export type SelectTask<T = object> = {
+export type SelectTask = {
   /**
    * Bigint
    */
   id: string;
   retrycount: number;
-  state: number;
-  data: TaskDTO<T>;
+  state: TaskState;
+  data: JsonValue;
+  meta_data: MetaData;
+  config: InsertTask['cf'];
   expire_in_seconds: number;
 };
 
 export type SQLPlans = ReturnType<typeof createPlans>;
 
 export const createInsertTask = (task: OutgoingTask, trigger: TaskTrigger, keepInSeconds: number): InsertTask => ({
-  d: {
-    data: task.data,
+  d: task.data,
+  md: {
     tn: task.task_name,
     trace: trigger,
   },
   q: task.queue,
   eis: task.config.expireInSeconds,
-  kis: keepInSeconds,
-  r_b: task.config.retryBackoff,
-  r_d: task.config.retryDelay,
-  r_l: task.config.retryLimit,
+  cf: {
+    r_b: task.config.retryBackoff,
+    r_d: task.config.retryDelay,
+    r_l: task.config.retryLimit,
+    ki_s: keepInSeconds,
+  },
   saf: task.config.startAfterSeconds,
   skey: task.config.singletonKey,
 });
+
+export type ResolvedTask = { id: string; s: TaskState; out: any; saf?: number };
+
+export const createResolveTasksQueryFn = (sql: SchemaSQL) => (tasks: Array<ResolvedTask>) =>
+  sql`
+WITH _in as (
+  SELECT 
+    x.id as task_id,
+    x.s as new_state,
+    x.out as out,
+    x.saf as saf
+  FROM json_to_recordset(${JSON.stringify(tasks)}) as x(
+    id bigint,
+    s smallint,
+    out jsonb,
+    saf integer
+  )
+), compl as (
+  DELETE FROM {{schema}}.tasks t
+  WHERE t.id in (SELECT task_id FROM _in WHERE _in.new_state > ${TASK_STATES.active})
+    AND t.state = ${TASK_STATES.active}
+  RETURNING t.*
+), _completed_tasks as (
+  INSERT INTO {{schema}}.tasks_completed (
+    "id",
+    "queue",
+    "state",
+    "data",
+    "meta_data",
+    "config",
+    "output",
+    retryCount,
+    startedOn,
+    createdOn,
+    completedOn,
+    keepUntil
+  ) (SELECT 
+    compl.id,
+    compl.queue,
+    _in.new_state,
+    compl.data,
+    compl.meta_data,
+    compl.config,
+    COALESCE(_in.out, compl.output),
+    compl.retryCount,
+    compl.startedOn,
+    compl.createdOn,
+    now(),
+    (now() + (COALESCE((compl.config->>'ki_s')::integer, 60 * 60 * 24 * 7) * interval '1s'))
+    FROM compl INNER JOIN _in ON _in.task_id = compl.id)
+    RETURNING id
+) UPDATE {{schema}}.tasks t
+  SET
+    state = _in.new_state,
+    startAfter = (now() + (_in."saf" * interval '1s')),
+    output = _in.out
+  FROM _in
+  WHERE t.id = _in.task_id
+    AND _in.new_state = ${TASK_STATES.retry}
+    AND t.state = ${TASK_STATES.active}
+`;
 
 export const createPlans = (schema: string, queue: string) => {
   const sql = createSql(schema);
@@ -191,71 +267,17 @@ export const createPlans = (schema: string, queue: string) => {
     createTasksAndSetCursor,
     getCursorLockEvents,
     createEvents,
-    getTasks: (props: { amount: number }) => sql<SelectTask>`
-    with _tasks as (
+    getAndStartTasks: (props: { amount: number }) => sql<SelectTask>`
       SELECT
-        id
-      FROM {{schema}}.tasks
-      WHERE queue = ${queue}
-        AND startAfter < now()
-        AND state < ${TASK_STATES.active}
-      ORDER BY createdOn ASC
-      LIMIT ${props.amount}
-      FOR UPDATE SKIP LOCKED
-    ) UPDATE {{schema}}.tasks t 
-      SET
-        state = ${TASK_STATES.active}::smallint,
-        startedOn = now(),
-        retryCount = CASE WHEN state = ${TASK_STATES.retry} 
-                      THEN retryCount + 1 
-                      ELSE retryCount END
-      FROM _tasks
-      WHERE t.id = _tasks.id
-      RETURNING t.id, t.retryCount, t.state, t.data, 
-        (EXTRACT(epoch FROM expireIn))::int as expire_in_seconds
+        id,
+        retryCount,
+        state,
+        data,
+        meta_data,
+        config,
+        expire_in_seconds
+      FROM {{schema}}.get_tasks(${queue}, ${props.amount}::integer)
     `,
-    resolveTasks: (tasks: Array<{ t: string; p: string; s: boolean }>) => sql`
-    WITH _in as (
-      SELECT 
-        x.t as task_id,
-        x.s as success,
-        x.p as payload
-      FROM json_to_recordset(${JSON.stringify(tasks)}) as x(
-        t bigint,
-        s boolean,
-        p jsonb
-      )
-    ), _failed as (
-      UPDATE {{schema}}.tasks t
-      SET
-        state = CASE
-          WHEN retryCount < retryLimit THEN ${TASK_STATES.retry}::smallint ELSE ${TASK_STATES.failed}::smallint END,
-        completedOn = CASE WHEN retryCount < retryLimit THEN NULL ELSE now() END,
-        startAfter = CASE
-                      WHEN retryCount = retryLimit THEN startAfter
-                      WHEN NOT retryBackoff THEN now() + retryDelay * interval '1'
-                      ELSE now() +
-                        (
-                            retryDelay * 2 ^ LEAST(16, retryCount + 1) / 2
-                            +
-                            retryDelay * 2 ^ LEAST(16, retryCount + 1) / 2 * random()
-                        )
-                        * interval '1'
-                      END,
-        output = _in.payload
-      FROM _in
-      WHERE t.id = _in.task_id
-        AND _in.success = false
-        AND t.state < ${TASK_STATES.completed}
-    ) UPDATE {{schema}}.tasks t
-      SET
-        state = ${TASK_STATES.completed}::smallint,
-        completedOn = now(),
-        output = _in.payload
-      FROM _in
-      WHERE t.id = _in.task_id
-        AND _in.success = true
-        AND t.state = ${TASK_STATES.active}
-    `,
+    resolveTasks: createResolveTasksQueryFn(sql),
   };
 };

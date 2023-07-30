@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { PGTaskBoss, withPG } from '../../../src/use/pg';
+import { withPG } from '../../../src/use/pg';
 import { cleanupSchema, createRandomSchema } from './helpers';
 import tap from 'tap';
 import { createTaskBoss } from '../../../src';
@@ -125,7 +125,7 @@ tap.test('with-pg', async (tap) => {
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${task_name}'`)
+      .query(`SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${task_name}'`)
       .then((r) => r.rows[0]!);
 
     same(result.output, {
@@ -178,7 +178,7 @@ tap.test('with-pg', async (tap) => {
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${task_name}'`)
+      .query(`SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${task_name}'`)
       .then((r) => r.rows[0]!);
 
     same(result.output, {
@@ -218,7 +218,7 @@ tap.test('with-pg', async (tap) => {
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${task_name}'`)
+      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND meta_data->>'tn' = '${task_name}'`)
       .then((r) => r.rows[0]!);
     equal(result.output.message, 'expected-error');
 
@@ -260,7 +260,7 @@ tap.test('with-pg', async (tap) => {
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${task_name}'`)
+      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND meta_data->>'tn' = '${task_name}'`)
       .then((r) => r.rows[0]!);
 
     same(result.output, { custom_payload: 123 });
@@ -364,7 +364,7 @@ tap.test('with-pg', async (tap) => {
     );
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${taskName}'`)
+      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND meta_data->>'tn' = '${taskName}'`)
       .then((r) => r.rows);
 
     equal(result.length, 1);
@@ -418,7 +418,7 @@ tap.test('with-pg', async (tap) => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND data->>'tn' = '${task_name}'`)
+      .query(`SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${task_name}'`)
       .then((r) => r.rows);
 
     equal(result.length, 2);

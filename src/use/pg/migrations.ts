@@ -27,18 +27,20 @@ export const createMigrationStore = (schema: string) => [
     );
     
     CREATE TABLE ${schema}."events" (
-      "id" uuid NOT NULL DEFAULT gen_random_uuid(),
+      "id" BIGSERIAL PRIMARY KEY,
       "event_name" text NOT NULL,
       "event_data" jsonb NOT NULL,
       "pos" bigint not null default 0,
-      "created_at" timestamptz NOT NULL DEFAULT now(), 
-      PRIMARY KEY ("id") 
+      "created_at" timestamptz NOT NULL DEFAULT now(),
+      "expire_at" date not null default now() + interval '30 days'
     );
-    
-    CREATE INDEX idx_events_pos ON ${schema}."events" (pos) WHERE pos > 0;
+
+    CREATE INDEX ON ${schema}."events" (expire_at);
+    CREATE INDEX ON ${schema}."events" (pos) WHERE pos > 0;
     
     CREATE SEQUENCE ${schema}.event_order as bigint start 1;
     
+    -- to imrpove performance, dont update seperately
     CREATE FUNCTION ${schema}.proc_set_position()
         RETURNS TRIGGER
         LANGUAGE plpgsql
@@ -59,89 +61,161 @@ export const createMigrationStore = (schema: string) => [
   `,
   `
     CREATE TABLE ${schema}.tasks (
-      id uuid primary key not null default gen_random_uuid(),
+      id BIGSERIAL PRIMARY KEY,
       queue text not null,
-      data jsonb,
       state smallint not null default(0),
-      retryLimit integer not null default(0),
-      retryCount integer not null default(0),
-      retryDelay integer not null default(0),
-      retryBackoff boolean not null default false,
-      startAfter timestamp with time zone not null default now(),
+      data jsonb not null,
+      meta_data jsonb,
+      config jsonb not null,
+      retryCount smallint not null default 0,
       startedOn timestamp with time zone,
-      expireIn interval not null default interval '2 minutes',
       createdOn timestamp with time zone not null default now(),
-      completedOn timestamp with time zone,
-      keepUntil timestamp with time zone NOT NULL default now() + interval '14 days',
+      startAfter timestamp with time zone not null default now(),
+      expireIn interval not null default interval '2 minutes',
+      "singleton_key" text default null,
       output jsonb
     ) -- https://www.cybertec-postgresql.com/en/what-is-fillfactor-and-how-does-it-affect-postgresql-performance/
     WITH (fillfactor=90);
 
-    CREATE INDEX idx_get_tasks ON ${schema}."tasks" ("queue", startAfter) WHERE state < 2;
-    CREATE INDEX idx_expire_tasks ON ${schema}."tasks" ("state") WHERE state = 2;
-    CREATE INDEX idx_purge_tasks ON ${schema}."tasks" (keepUntil) WHERE state >= 3;
-  `,
-  `
-    ALTER TABLE  ${schema}."tasks" ADD COLUMN "singleton_key" text default null;
-    -- 0: create, 1: retry, 2: active, 3 >= all completed/failed
-    CREATE UNIQUE INDEX idx_unique_queue_task ON ${schema}."tasks" ("queue", "singleton_key") WHERE state < 3;
-  `,
-  `
-    ALTER TABLE ${schema}.tasks DROP COLUMN "id";
-    ALTER TABLE ${schema}.events DROP COLUMN "id";
-    
-    ALTER TABLE ${schema}.events ADD COLUMN id BIGSERIAL PRIMARY KEY;
-    ALTER TABLE ${schema}.tasks ADD COLUMN id BIGSERIAL PRIMARY KEY;
-    
-    CREATE OR REPLACE FUNCTION ${schema}.create_bus_tasks(tasks jsonb)
-      RETURNS SETOF ${schema}.tasks
-      AS $$
-    BEGIN
-      INSERT INTO ${schema}.tasks (
-        "queue",
-        "data",
-        "state",
-        retryLimit,
-        retryDelay,
-        retryBackoff,
-        singleton_key,
-        startAfter,
-        expireIn,
-        keepUntil
-      )
-      SELECT
-        "q" as "queue",
-        "d" as "data",
-        COALESCE("s", 0) as "state",
-        "r_l" as "retryLimit",
-        "r_d" as "retryDelay",
-        "r_b" as "retryBackoff",
-        "skey" as singleton_key,
-        (now() + ("saf" * interval '1s'))::timestamptz as startAfter,
-        "eis" * interval '1s' as expireIn,
-        (now() + ("saf" * interval '1s') + ("kis" * interval '1s'))::timestamptz as keepUntil
-      FROM jsonb_to_recordset(tasks) as x(
-        "q" text,
-        "d" jsonb,
-        "s" smallint,
-        "r_l" integer,
-        "r_d" integer,
-        "r_b" boolean,
-        "saf" integer,
-        "eis" integer,
-        "kis" integer,
-        "skey" text
-      )
-      ON CONFLICT DO NOTHING;
-      RETURN;
-    END;
-    $$ LANGUAGE 'plpgsql';  
-  `,
-  `
-    ALTER TABLE ${schema}.events ADD COLUMN expire_at date not null default now() + interval '30 days';
+    -- get tasks
+    CREATE INDEX ON ${schema}."tasks" ("queue", startAfter) WHERE "state" < 2;
+    -- used for expiring tasks
+    CREATE INDEX ON ${schema}."tasks" ("state") WHERE state = 2;
 
-    CREATE INDEX idx_events_expire_at ON ${schema}."events" (expire_at);
-    
+    -- singleton task
+    CREATE UNIQUE INDEX ON ${schema}."tasks" ("queue", "singleton_key") WHERE state < 3;
+
+    CREATE TABLE ${schema}.tasks_completed (
+      -- coming from the task table
+      id bigint PRIMARY KEY,
+      queue text not null,
+      state smallint not null,
+      data jsonb,
+      meta_data jsonb,
+      config jsonb,
+      output jsonb,
+      retryCount smallint not null default 0,
+      startedOn timestamp with time zone,
+      createdOn timestamp with time zone not null default now(),
+      completedOn timestamp with time zone,
+      keepUntil timestamp with time zone NOT NULL default now() + interval '14 days'
+    ) WITH (fillfactor=90);
+
+    CREATE INDEX ON ${schema}."tasks_completed" (keepUntil);
+  `,
+  `
+    CREATE OR REPLACE FUNCTION ${schema}.get_tasks(target_q text, amount integer)
+      RETURNS TABLE (id bigint, retryCount smallint, state smallint, data jsonb, meta_data jsonb, config jsonb, expire_in_seconds integer) 
+      AS $$
+      BEGIN
+        RETURN QUERY
+        with _tasks as (
+          SELECT
+            _t.id as id
+          FROM ${schema}.tasks _t
+          WHERE _t.queue = target_q
+            AND _t.startAfter < now()
+            AND _t.state < 2
+          ORDER BY _t.createdOn ASC
+          LIMIT amount
+          FOR UPDATE SKIP LOCKED
+        ) UPDATE ${schema}.tasks t 
+          SET
+            state = 2,
+            startedOn = now(),
+            retryCount = CASE WHEN t.state = 1
+                          THEN t.retryCount + 1 
+                          ELSE t.retryCount END
+          FROM _tasks
+          WHERE t.id = _tasks.id
+          RETURNING t.id, t.retryCount, t.state, t.data, t.meta_data, t.config,
+            (EXTRACT(epoch FROM expireIn))::int as expire_in_seconds;
+      END
+      $$ LANGUAGE 'plpgsql';
+
+    CREATE OR REPLACE FUNCTION ${schema}.create_bus_tasks(tasks jsonb)
+      RETURNS SETOF ${schema}.tasks AS $$
+      BEGIN
+        INSERT INTO ${schema}.tasks (
+          "queue",
+          "state",
+          "data",
+          "meta_data",
+          "config",
+          "singleton_key",
+          startAfter,
+          expireIn
+        )
+        SELECT
+          "q" as "queue",
+          COALESCE("s", 0) as "state",
+          "d" as "data",
+          "md" as meta_data,
+          "cf" as config,
+          "skey" as singleton_key,
+          (now() + ("saf" * interval '1s'))::timestamptz as startAfter,
+          "eis" * interval '1s' as expireIn
+        FROM jsonb_to_recordset(tasks) as x(
+          "q" text,
+          "s" smallint,
+          "d" jsonb,
+          "md" jsonb,
+          "cf" jsonb,
+          "skey" text,
+          "saf" integer,
+          "eis" integer
+        )
+        ON CONFLICT DO NOTHING;
+        RETURN;
+      END
+    $$ LANGUAGE 'plpgsql';  
+
+    CREATE OR REPLACE FUNCTION ${schema}.create_complete_tasks(tasks jsonb)
+      RETURNS SETOF ${schema}.tasks_completed AS $$
+      BEGIN
+        INSERT INTO ${schema}.tasks_completed (
+          "id",
+          "queue",
+          "state",
+          "data",
+          "meta_data",
+          "config",
+          "output",
+          startedOn,
+          createdOn,
+          completedOn,
+          keepUntil
+        )
+        SELECT
+          "id",
+          "q" as "queue",
+          "s" as "state",
+          "d" as "data",
+          "md" as meta_data,
+          "cf" as config,
+          "out" as output,
+          "s_on" as startedOn,
+          "c_on" as createdOn,
+          "compl_on" as completedOn,
+          (now() + ("kis" * interval '1s'))::timestamptz as keepUntil
+        FROM jsonb_to_recordset(tasks) as x(
+          "id" bigint,
+          "q" text,
+          "s" smallint,
+          "d" jsonb,
+          "md" jsonb,
+          "cf" jsonb,
+          "out" jsonb,
+          "s_on" timestamptz,
+          "c_on" timestamptz,
+          "compl_on" timestamptz,
+          "kis" integer
+        )
+        ON CONFLICT DO NOTHING;
+        RETURN;
+      END
+    $$ LANGUAGE 'plpgsql';
+
     CREATE OR REPLACE FUNCTION ${schema}.create_bus_events(events jsonb)
       RETURNS SETOF ${schema}.events
       AS $$

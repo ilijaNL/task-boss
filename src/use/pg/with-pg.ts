@@ -112,7 +112,7 @@ export const withPG = (
     poolInternvalInMs: workerConfig.intervalInMs,
     refillThresholdPct: workerConfig.refillFactor,
     plans: sqlPlans,
-    async handler({ data: { data, tn, trace }, expire_in_seconds, retrycount, id }): Promise<any> {
+    async handler({ data, meta_data, expire_in_seconds, retrycount, id }): Promise<any> {
       const future = new DeferredPromise();
 
       taskBoss
@@ -120,8 +120,8 @@ export const withPG = (
           expire_in_seconds: expire_in_seconds,
           id: id,
           retried: retrycount,
-          task_name: tn,
-          trigger: trace,
+          task_name: meta_data.tn,
+          trigger: meta_data.trace,
           fail(data) {
             future.reject(data);
           },
@@ -143,7 +143,7 @@ export const withPG = (
   // Worker which is responsible for processing incoming events and creating tasks
   const fanoutWorker = createBaseWorker(
     async () => {
-      const fetchSize = 100;
+      const fetchSize = 200;
       const trxResult = await withTransaction<{ hasMore: boolean; hasChanged: boolean }>(pool, async (client) => {
         const events = await query(client, sqlPlans.getCursorLockEvents({ limit: fetchSize }));
         // nothing to do
@@ -154,7 +154,11 @@ export const withPG = (
         const newCursor = +events[events.length - 1]!.position;
 
         const insertTasks = events.reduce((agg, event) => {
-          const tasks = taskBoss.toTasks(event);
+          const tasks = taskBoss.toTasks({
+            event_data: event.event_data,
+            event_name: event.event_name,
+            id: event.id,
+          });
 
           agg.push(
             ...tasks.map<InsertTask>((task) =>
@@ -198,7 +202,7 @@ export const withPG = (
   /**
    * Returnes a query command which can be used to do manual submitting
    */
-  function getPublishCommand(events: TEvent<string, any>[]): QueryCommand<{}> {
+  function getPublishCommand(events: TEvent<string>[]): QueryCommand<{}> {
     return sqlPlans.createEvents(events.map((e) => ({ d: e.data, e_n: e.event_name, rid: retention_in_days })));
   }
 
@@ -207,11 +211,7 @@ export const withPG = (
    */
   function getSendCommand(tasks: Task[]): QueryCommand<{}> {
     return sqlPlans.createTasks(
-      tasks.map<InsertTask>((_task) => {
-        const task = taskBoss.getTask(_task);
-
-        return createInsertTask(task, directTask, keepInSeconds);
-      })
+      tasks.map<InsertTask>((_task) => createInsertTask(taskBoss.getTask(_task), directTask, keepInSeconds))
     );
   }
 

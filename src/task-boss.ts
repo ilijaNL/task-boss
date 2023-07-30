@@ -12,7 +12,7 @@ import {
   createEventHandler,
   defaultTaskConfig,
 } from './definitions';
-import { resolveWithinSeconds } from './utils';
+import { JsonValue, resolveWithinSeconds } from './utils';
 
 export type TaskState = {
   task_name: string;
@@ -27,7 +27,7 @@ export type TaskState = {
 export type IncomingEvent = {
   id: string;
   event_name: string;
-  event_data: any;
+  event_data: JsonValue;
 };
 
 export type TaskBossState = {
@@ -36,7 +36,7 @@ export type TaskBossState = {
   tasks: Array<TaskState>;
 };
 
-export type OutgoingTask = Task<{}> & {
+export type OutgoingTask = Task<JsonValue> & {
   config: TaskConfig;
   queue: string;
 };
