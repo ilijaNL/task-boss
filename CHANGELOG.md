@@ -1,5 +1,11 @@
 # task-boss
 
+## 0.0.7
+
+### Patch Changes
+
+- 3054e82: Rewrite pg adapter for better performance
+
 ## 0.0.6
 
 ### Patch Changes
