@@ -79,6 +79,7 @@ export const createMigrationStore = (schema: string) => [
 
     -- get tasks
     CREATE INDEX ON ${schema}."tasks" ("queue", startAfter) WHERE "state" < 2;
+
     -- used for expiring tasks
     CREATE INDEX ON ${schema}."tasks" ("state") WHERE state = 2;
 
@@ -99,7 +100,7 @@ export const createMigrationStore = (schema: string) => [
       createdOn timestamp with time zone not null default now(),
       completedOn timestamp with time zone,
       keepUntil timestamp with time zone NOT NULL default now() + interval '14 days'
-    ) WITH (fillfactor=90);
+    );
 
     CREATE INDEX ON ${schema}."tasks_completed" (keepUntil);
   `,
@@ -131,7 +132,7 @@ export const createMigrationStore = (schema: string) => [
           RETURNING t.id, t.retryCount, t.state, t.data, t.meta_data, t.config,
             (EXTRACT(epoch FROM expireIn))::int as expire_in_seconds;
       END
-      $$ LANGUAGE 'plpgsql';
+    $$ LANGUAGE 'plpgsql';
 
     CREATE OR REPLACE FUNCTION ${schema}.create_bus_tasks(tasks jsonb)
       RETURNS SETOF ${schema}.tasks AS $$
@@ -169,52 +170,6 @@ export const createMigrationStore = (schema: string) => [
         RETURN;
       END
     $$ LANGUAGE 'plpgsql';  
-
-    CREATE OR REPLACE FUNCTION ${schema}.create_complete_tasks(tasks jsonb)
-      RETURNS SETOF ${schema}.tasks_completed AS $$
-      BEGIN
-        INSERT INTO ${schema}.tasks_completed (
-          "id",
-          "queue",
-          "state",
-          "data",
-          "meta_data",
-          "config",
-          "output",
-          startedOn,
-          createdOn,
-          completedOn,
-          keepUntil
-        )
-        SELECT
-          "id",
-          "q" as "queue",
-          "s" as "state",
-          "d" as "data",
-          "md" as meta_data,
-          "cf" as config,
-          "out" as output,
-          "s_on" as startedOn,
-          "c_on" as createdOn,
-          "compl_on" as completedOn,
-          (now() + ("kis" * interval '1s'))::timestamptz as keepUntil
-        FROM jsonb_to_recordset(tasks) as x(
-          "id" bigint,
-          "q" text,
-          "s" smallint,
-          "d" jsonb,
-          "md" jsonb,
-          "cf" jsonb,
-          "out" jsonb,
-          "s_on" timestamptz,
-          "c_on" timestamptz,
-          "compl_on" timestamptz,
-          "kis" integer
-        )
-        ON CONFLICT DO NOTHING;
-        RETURN;
-      END
-    $$ LANGUAGE 'plpgsql';
 
     CREATE OR REPLACE FUNCTION ${schema}.create_bus_events(events jsonb)
       RETURNS SETOF ${schema}.events
