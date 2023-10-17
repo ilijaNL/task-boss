@@ -3,11 +3,12 @@ import { BaseClient, TaskBoss } from '../../task-boss';
 import { TEvent, Task } from '../../definitions';
 import { QueryCommand, query, withTransaction } from './sql';
 import { migrate } from './migrations';
-import { InsertTask, createPlans, createInsertTask } from './plans';
+import { InsertTask, createPlans, createInsertTask, ResolvedTask, TASK_STATES } from './plans';
 import { createMaintainceWorker } from './maintaince';
 import { createBaseWorker } from '../../worker';
 import { createTaskWorker } from './task';
 import { DeferredPromise, debounce } from '../../utils';
+import { createBatcher } from 'node-batcher';
 
 export type WorkerConfig = {
   /**
@@ -38,9 +39,9 @@ export interface PGTaskBoss extends BaseClient {
   getSendCommand: (tasks: Task[]) => QueryCommand<{}>;
 }
 
-const directTask = {
+const directTask = Object.freeze({
   type: 'direct',
-} as const;
+});
 
 export const withPG = (
   taskBoss: TaskBoss,
@@ -106,16 +107,31 @@ export const withPG = (
     };
   }
 
+  const resolveTaskBatcher = createBatcher<ResolvedTask>({
+    async onFlush(batch) {
+      await query(pool, sqlPlans.resolveTasks(batch.map((i) => i.data)));
+    },
+    // dont make to big since payload can be big
+    maxSize: 75,
+    // keep it low latency
+    maxTimeInMs: 50,
+  });
+
   const tWorker = createTaskWorker({
-    client: pool,
     maxConcurrency: workerConfig.concurrency,
     poolInternvalInMs: workerConfig.intervalInMs,
     refillThresholdPct: workerConfig.refillFactor,
-    plans: sqlPlans,
+    async popTasks(amount) {
+      return query(pool, sqlPlans.getAndStartTasks(amount));
+    },
+    async resolveTask(task) {
+      await resolveTaskBatcher.add(task);
+    },
     async handler({ data, meta_data, expire_in_seconds, retrycount, id }): Promise<any> {
-      const future = new DeferredPromise();
+      let future: DeferredPromise = new DeferredPromise();
 
       taskBoss
+        // todo convert TaskHandlerCtx to class
         .handle(data, {
           expire_in_seconds: expire_in_seconds,
           id: id,
@@ -136,6 +152,7 @@ export const withPG = (
           future.reject(e);
         });
 
+      // clean up
       return future.promise;
     },
   });
@@ -145,9 +162,10 @@ export const withPG = (
     async () => {
       const fetchSize = 200;
       const trxResult = await withTransaction<{ hasMore: boolean; hasChanged: boolean }>(pool, async (client) => {
-        const events = await query(client, sqlPlans.getCursorLockEvents({ limit: fetchSize }));
+        const events = await query(client, sqlPlans.getCursorLockEvents(fetchSize));
         // nothing to do
         if (events.length === 0) {
+          // update cursor to the latest point
           return { hasChanged: false, hasMore: false };
         }
 
@@ -258,7 +276,12 @@ export const withPG = (
 
       state.stopped = true;
 
-      await Promise.all([fanoutWorker.stop(), maintainceWorker.stop(), tWorker.stop()]);
+      await Promise.all([
+        fanoutWorker.stop(),
+        maintainceWorker.stop(),
+        tWorker.stop(),
+        resolveTaskBatcher.waitForAll(),
+      ]);
 
       await cleanupDB();
       // only allow to start when fully stopped

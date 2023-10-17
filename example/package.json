@@ -5,7 +5,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "tsx ./src/pg.ts"
+    "start": "tsx ./src/pg.ts",
+    "start:prod": "node ./lib/pg.js",
+    "build": "tsc"
   },
   "author": "",
   "license": "MIT",

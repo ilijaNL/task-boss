@@ -6,6 +6,7 @@
     "outDir": "./lib",
     "module": "commonjs",
     "composite": false,
+    "noEmit": true,
     "declaration": true,
     "declarationMap": false,
     "newLine": "lf",
@@ -29,5 +30,5 @@
     "skipLibCheck": true,
     "strict": true
   },
-  "include": ["./src/"]
+  "include": ["./src/", "./tests"]
 }

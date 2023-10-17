@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import crypto from 'node:crypto';
 import { createSql, query, withTransaction } from './sql';
 import { Pool } from 'pg';
 
@@ -78,7 +78,7 @@ export const createMigrationStore = (schema: string) => [
     WITH (fillfactor=90);
 
     -- get tasks
-    CREATE INDEX ON ${schema}."tasks" ("queue", startAfter) WHERE "state" < 2;
+    CREATE INDEX ON ${schema}."tasks" ("queue", startAfter) WHERE state < 2;
 
     -- used for expiring tasks
     CREATE INDEX ON ${schema}."tasks" ("state") WHERE state = 2;

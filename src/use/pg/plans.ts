@@ -27,6 +27,10 @@ type SelectEvent = {
   position: string;
 };
 
+export function getStartAfter(task: SelectTask) {
+  return task.config.r_b ? task.config.r_d * Math.pow(2, task.retrycount) : task.config.r_d;
+}
+
 export type InsertEvent = {
   /**
    * Event name
@@ -154,13 +158,13 @@ WITH _in as (
   RETURNING t.*
 ), _completed_tasks as (
   INSERT INTO {{schema}}.tasks_completed (
-    "id",
-    "queue",
-    "state",
-    "data",
-    "meta_data",
-    "config",
-    "output",
+    id,
+    queue,
+    state,
+    data,
+    meta_data,
+    config,
+    output,
     retryCount,
     startedOn,
     createdOn,
@@ -236,7 +240,7 @@ export const createPlans = (schema: string, queue: string) => {
   }
 
   // the pos > 0 is needed to have an index scan on events table
-  function getCursorLockEvents(options: { limit: number }) {
+  function getCursorLockEvents(limit: number) {
     const events = sql<SelectEvent>`
       SELECT 
         id, 
@@ -255,7 +259,7 @@ export const createPlans = (schema: string, queue: string) => {
         SKIP LOCKED
       )
       ORDER BY pos ASC
-      LIMIT ${options.limit}`;
+      LIMIT ${limit}`;
 
     return events;
   }
@@ -267,7 +271,7 @@ export const createPlans = (schema: string, queue: string) => {
     createTasksAndSetCursor,
     getCursorLockEvents,
     createEvents,
-    getAndStartTasks: (props: { amount: number }) => sql<SelectTask>`
+    getAndStartTasks: (amount: number) => sql<SelectTask>`
       SELECT
         id,
         retryCount,
@@ -276,7 +280,7 @@ export const createPlans = (schema: string, queue: string) => {
         meta_data,
         config,
         expire_in_seconds
-      FROM {{schema}}.get_tasks(${queue}, ${props.amount}::integer)
+      FROM {{schema}}.get_tasks(${queue}, ${amount}::integer)
     `,
     resolveTasks: createResolveTasksQueryFn(sql),
   };
