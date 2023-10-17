@@ -460,6 +460,76 @@ tap.test('task worker', async (t) => {
       t.equal(result.state, TASK_STATES.expired);
     });
 
+    t.test('expires with retry', async (t) => {
+      const worker = createMaintainceWorker({
+        client: sqlPool,
+        schema,
+        expireInterval: 100,
+      });
+
+      worker.start();
+      t.teardown(() => worker.stop());
+
+      const outgoingTask = tboss.getTask({
+        task_name: 'expired-task-123-retry',
+        config: {
+          expireInSeconds: 1,
+          retryBackoff: false,
+          retryLimit: 1,
+          retryDelay: 1,
+        },
+        data: {},
+      });
+
+      const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 120);
+
+      await query(sqlPool, plans.createTasks([insertTask]));
+
+      // mark the task as started
+      await query(sqlPool, plans.getAndStartTasks(100));
+
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      {
+        const r1 = await sqlPool
+          .query(
+            `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = 'expired-task-123-retry' LIMIT 1`
+          )
+          .then((r) => r.rows);
+
+        t.equal(r1.length, 0);
+
+        const r2 = await sqlPool
+          .query(
+            `SELECT * FROM ${schema}.tasks WHERE queue = '${queue}' AND meta_data->>'tn' = 'expired-task-123-retry' LIMIT 1`
+          )
+          .then((r) => r.rows[0]);
+
+        t.equal(r2.state, TASK_STATES.retry);
+        t.equal(r2.retrycount, 0);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+
+      // mark the task as started
+      const res = await query(sqlPool, plans.getAndStartTasks(100));
+      t.equal(res.length, 1);
+
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+
+      {
+        const result = await sqlPool
+          .query(
+            `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = 'expired-task-123-retry' LIMIT 1`
+          )
+          .then((r) => r.rows[0]);
+
+        t.equal(result.state, TASK_STATES.expired);
+        t.equal(result.retrycount, 1);
+      }
+    });
+
     t.test('purges tasks', async (t) => {
       const worker = createMaintainceWorker({
         client: sqlPool,

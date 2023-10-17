@@ -7,7 +7,7 @@ import { InsertTask, createPlans, createInsertTask, ResolvedTask, TASK_STATES } 
 import { createMaintainceWorker } from './maintaince';
 import { createBaseWorker } from '../../worker';
 import { createTaskWorker } from './task';
-import { DeferredPromise, debounce } from '../../utils';
+import { DeferredPromise, JsonValue, debounce } from '../../utils';
 import { createBatcher } from 'node-batcher';
 
 export type WorkerConfig = {
@@ -128,7 +128,7 @@ export const withPG = (
       await resolveTaskBatcher.add(task);
     },
     async handler({ data, meta_data, expire_in_seconds, retrycount, id }): Promise<any> {
-      let future: DeferredPromise = new DeferredPromise();
+      const future: DeferredPromise = new DeferredPromise();
 
       taskBoss
         // todo convert TaskHandlerCtx to class
@@ -229,6 +229,10 @@ export const withPG = (
     );
   }
 
+  function shouldNotifyTaskWorker(t: Task<JsonValue>) {
+    return (t.queue === taskBoss.queue || !t.queue) && !t.config.startAfterSeconds;
+  }
+
   return {
     getState: taskBoss.getState,
     getPublishCommand: getPublishCommand,
@@ -238,7 +242,8 @@ export const withPG = (
 
       // check if instance is affected by the new tasks
       // if queue is not specified, it means we will create task for this instance
-      const hasEffectToCurrentWorker = tasks.some((t) => t.queue === taskBoss.queue || !t.queue);
+      const hasEffectToCurrentWorker = tasks.some(shouldNotifyTaskWorker);
+
       if (hasEffectToCurrentWorker) {
         notifyWorker();
       }

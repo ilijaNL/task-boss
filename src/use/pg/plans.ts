@@ -188,7 +188,7 @@ WITH _in as (
 ) UPDATE {{schema}}.tasks t
   SET
     state = _in.new_state,
-    startAfter = (now() + (_in."saf" * interval '1s')),
+    startAfter = (now() + (_in.saf * interval '1s')),
     output = _in.out
   FROM _in
   WHERE t.id = _in.task_id

@@ -26,11 +26,10 @@ const createPlans = (schema: string) => {
     `,
     purgeTasks: () => sql`
       DELETE FROM {{schema}}.tasks_completed
-      WHERE "state" >= ${TASK_STATES.completed} 
-        AND keepUntil < now()
+      WHERE keepUntil < now()
     `,
     deleteOldEvents: () => sql`
-      DELETE FROM {{schema}}.events WHERE "expire_at" < now()
+      DELETE FROM {{schema}}.events WHERE expire_at < now()
     `,
   };
 };
@@ -43,7 +42,9 @@ export const createMaintainceWorker = (props: {
 }) => {
   const plans = createPlans(props.schema);
 
-  async function expireTasks(client: PoolClient): Promise<boolean> {
+  // should be used in transaction
+  // this can be probably be optimized to move to a single SQL query
+  async function expireTasksTrx(client: PoolClient): Promise<boolean> {
     const limit = 200;
     // get events that are expired
     const tasks = await query(client, plans.get_expired_tasks(limit));
@@ -53,7 +54,11 @@ export const createMaintainceWorker = (props: {
       client,
       plans.resolve_tasks(
         tasks.map((expTask) => {
-          const newState = expTask.retrycount < expTask.config.r_l ? TASK_STATES.retry : TASK_STATES.expired;
+          const newState =
+            expTask.retrycount >= expTask.config.r_l
+              ? //
+                TASK_STATES.expired
+              : TASK_STATES.retry;
 
           return {
             id: expTask.id,
@@ -68,14 +73,17 @@ export const createMaintainceWorker = (props: {
     return tasks.length === limit;
   }
 
-  const expireWorker = createBaseWorker(async () => withTransaction(props.client, expireTasks), {
+  const expireWorker = createBaseWorker(async () => withTransaction(props.client, expireTasksTrx), {
     loopInterval: props.expireInterval ?? 20000,
   });
 
   const cleanupWorker = createBaseWorker(
     async () => {
-      await query(props.client, plans.deleteOldEvents());
-      await query(props.client, plans.purgeTasks());
+      await Promise.all([
+        //
+        query(props.client, plans.deleteOldEvents()),
+        query(props.client, plans.purgeTasks()),
+      ]);
     },
     { loopInterval: props.cleanupInterval ?? 120000 }
   );
