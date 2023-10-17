@@ -15,6 +15,10 @@ async function main() {
     db: sqlPool,
     schema: 'taskboss_example',
     retention_in_days: 1,
+    worker: {
+      intervalInMs: 150,
+      concurrency: 100,
+    },
   });
 
   await boss.start();
@@ -25,14 +29,14 @@ async function main() {
   intervals.push(
     setInterval(() => {
       boss.publish(event.from({ duration: 3, event_d: 'event data' }));
-    }, 1000)
+    }, 10)
   );
 
   // emit task interval
   intervals.push(
     setInterval(() => {
       boss.send(task.from({ t: 'task' }));
-    }, 2000)
+    }, 50)
   );
 
   // emit task using taskclient
@@ -40,7 +44,7 @@ async function main() {
     setInterval(() => {
       boss.send(taskClient.defs.t1.from({ a: 'aa' }));
       boss.send(taskClient.defs.t2.from({ b: 'bb' }));
-    }, 5000)
+    }, 50)
   );
 
   const closeListeners = closeWithGrace({ delay: 3000 }, async ({ err }: any) => {

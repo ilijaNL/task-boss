@@ -42,7 +42,7 @@ const taskClient = createTaskClient(queue)
 taskBoss
   .registerTask(task, {
     handler: async (d, meta) => {
-      console.log('task', meta);
+      // console.log('task', meta);
       return {
         success: true,
       };
@@ -50,18 +50,18 @@ taskBoss
   })
   .registerTaskClient(taskClient, {
     async t1({ a }, meta) {
-      console.log('t1', meta);
+      // console.log('t1', meta);
       return a;
     },
     async t2({ b }, meta) {
-      console.log('t2', meta);
+      // console.log('t2', meta);
       return b;
     },
   })
   .on(event, {
     task_name: 'on_event',
     handler: async ({ event_d }, meta) => {
-      console.log('onEvent', meta);
+      // console.log('onEvent', meta.id);
       return {
         payload: event_d,
       };

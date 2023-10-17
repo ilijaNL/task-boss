@@ -19,43 +19,14 @@ function resolvesInTime<T>(p1: Promise<T>, ms: number) {
 tap.test('task worker', async (t) => {
   t.jobs = 5;
 
-  const schema = 'taskworker';
-
-  const sqlPool = new Pool({
-    connectionString: connectionString,
-  });
-
-  t.teardown(async () => {
-    await cleanupSchema(sqlPool, schema);
-    await sqlPool.end();
-  });
-
-  await migrate(sqlPool, schema);
-
   t.test('happy path', async (t) => {
-    const queue = 'happy';
-    const plans = createPlans(schema, queue);
-
-    const worker = createTaskWorker({
-      client: sqlPool,
-      async handler(event) {
-        return {
-          works: event.meta_data.tn,
-        };
-      },
-      maxConcurrency: 10,
-      poolInternvalInMs: 100,
-      refillThresholdPct: 0.33,
-      plans: plans,
-    });
-
-    worker.start();
-    t.teardown(() => worker.stop());
+    t.plan(3);
+    const ee = new EventEmitter();
 
     const insertTask: InsertTask = createInsertTask(
       {
         task_name: 'happy-task',
-        queue: queue,
+        queue: 'test',
         data: {},
         config: {
           expireInSeconds: 10,
@@ -70,94 +41,101 @@ tap.test('task worker', async (t) => {
       120
     );
 
-    await query(sqlPool, plans.createTasks([insertTask]));
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    const result = await sqlPool
-      .query(
-        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${insertTask.md.tn}' LIMIT 1`
-      )
-      .then((r) => {
-        return r.rows[0];
-      });
-
-    t.equal(result.output.works, 'happy-task');
-    t.equal(result.state, TASK_STATES.completed);
-  });
-
-  t.test('skip fetching when maxConcurrency is reached', async (t) => {
-    let handlerCalls = 0;
-    let queryCalls = 0;
-    const amountOfTasks = 50;
-
-    const tasks: SelectTask[] = new Array<SelectTask>(amountOfTasks)
-      .fill({
-        meta_data: {
-          tn: 't',
-          trace: { type: 'direct' },
-        },
-        config: {
-          ki_s: 21,
-          r_b: false,
-          r_d: 1,
-          r_l: 3,
-        },
-        state: 0,
-        retrycount: 0,
-        id: '0',
-        data: {},
-        expire_in_seconds: 10,
-      })
-      .map((r, idx) => ({ ...r, id: `${idx}` }));
-
-    const ee = new EventEmitter();
-
-    const mockedPool: PGClient = {
-      async query(props) {
-        // this is to fetch tasks
-        if (props.text.includes('.get_tasks(')) {
-          queryCalls += 1;
-          // $3 is amount of rows requested
-          const rows = tasks.splice(0, props.values[1]);
-
-          return {
-            rowCount: rows.length,
-            rows: rows as any,
-          };
-        }
-
-        return {
-          rowCount: 0,
-          rows: [],
-        };
-      },
-    };
-
     const worker = createTaskWorker({
-      plans: createPlans(schema, 'doesnotmatter'),
-      client: mockedPool,
+      async popTasks(amount) {
+        t.equal(amount, 20);
+        return [
+          {
+            config: insertTask.cf,
+            data: insertTask.d,
+            expire_in_seconds: insertTask.eis,
+            id: '222',
+            meta_data: insertTask.md,
+            retrycount: 0,
+            state: TASK_STATES.active,
+          },
+        ];
+      },
+      async resolveTask(task) {
+        t.equal(task.id, '222');
+        t.same(task.out, {
+          works: insertTask.md.tn,
+        });
+        ee.emit('resolved');
+      },
       async handler(event) {
-        handlerCalls += 1;
-
-        const delay = 80;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        if (handlerCalls === amountOfTasks) {
-          ee.emit('completed');
-        }
         return {
           works: event.meta_data.tn,
         };
       },
-      // fetch all at once
+      maxConcurrency: 20,
+      poolInternvalInMs: 100,
+      refillThresholdPct: 0.33,
+    });
+
+    worker.start();
+    t.teardown(() => worker.stop());
+
+    await once(ee, 'resolved');
+  });
+
+  t.test('stop fetching when maxConcurrency is reached', async (t) => {
+    const ee = new EventEmitter();
+
+    const insertTask: InsertTask = createInsertTask(
+      {
+        task_name: 'happy-task',
+        queue: 'test',
+        data: {},
+        config: {
+          expireInSeconds: 10,
+          retryBackoff: false,
+          retryLimit: 1,
+          retryDelay: 1,
+          singletonKey: null,
+          startAfterSeconds: 0,
+        },
+      },
+      { type: 'direct' },
+      120
+    );
+
+    let handlerCalls = 0;
+    let queryCalls = 0;
+    const amountOfTasks = 50;
+
+    const worker = createTaskWorker({
+      async popTasks(amount) {
+        queryCalls += 1;
+        return new Array<SelectTask>(amountOfTasks)
+          .fill({
+            config: insertTask.cf,
+            data: insertTask.d,
+            expire_in_seconds: insertTask.eis,
+            id: '',
+            meta_data: insertTask.md,
+            retrycount: 0,
+            state: TASK_STATES.active,
+          })
+          .map((r, idx) => ({ ...r, id: `${idx}` }));
+      },
+      async resolveTask(task) {},
+      async handler(event) {
+        handlerCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        if (handlerCalls === amountOfTasks) {
+          ee.emit('completed');
+        }
+      },
       maxConcurrency: amountOfTasks,
       poolInternvalInMs: 20,
       refillThresholdPct: 0.33,
     });
 
     worker.start();
+    t.teardown(() => worker.stop());
 
     await once(ee, 'completed');
-
     // wait for last item to be resolved
     await worker.stop();
 
@@ -166,12 +144,11 @@ tap.test('task worker', async (t) => {
   });
 
   t.test('refills', async (t) => {
-    const queue = 'refills';
     let handlerCalls = 0;
-    let queryCalls = 0;
+    let popCalls = 0;
+    const amountOfTasks = 100;
     const ee = new EventEmitter();
-    const plans = createPlans(schema, queue);
-    const tasks: SelectTask[] = new Array<SelectTask>(100)
+    const tasks: SelectTask[] = new Array<SelectTask>(amountOfTasks)
       .fill({
         state: 0,
         retrycount: 0,
@@ -191,33 +168,17 @@ tap.test('task worker', async (t) => {
       })
       .map((r, idx) => ({ ...r, id: `${idx}` }));
 
-    const mockedPool: PGClient = {
-      async query(props) {
-        // this is to fetch tasks
-        if (props.text.includes('.get_tasks(')) {
-          queryCalls += 1;
-          // $3 is amount of rows
-          const rows = tasks.splice(0, props.values[1]);
-
-          if (tasks.length === 0) {
-            ee.emit('drained');
-          }
-
-          return {
-            rowCount: rows.length,
-            rows: rows as any,
-          };
+    const worker = createTaskWorker({
+      async resolveTask(task) {},
+      async popTasks(amount) {
+        popCalls = popCalls + 1;
+        const result = tasks.splice(0, amount);
+        if (tasks.length === 0) {
+          ee.emit('drained');
         }
 
-        return {
-          rowCount: 0,
-          rows: [],
-        };
+        return result;
       },
-    };
-    const worker = createTaskWorker({
-      client: mockedPool,
-      plans: plans,
       async handler(event) {
         handlerCalls += 1;
         // resolves between 10-30ms
@@ -241,40 +202,21 @@ tap.test('task worker', async (t) => {
     await worker.stop();
 
     // make some assumptions such that we dont fetch to much, aka threshold
-    t.ok(queryCalls > 10);
-    t.ok(queryCalls < 20);
+    t.ok(popCalls > 10);
+    t.ok(popCalls < 20);
 
-    t.equal(handlerCalls, 100);
+    t.equal(handlerCalls, amountOfTasks);
   });
 
   t.test('retries', async (t) => {
-    const queue = 'retries';
-    let called = 0;
-
-    const plans = createPlans(schema, queue);
-
-    const worker = createTaskWorker({
-      client: sqlPool,
-      async handler(event) {
-        called += 1;
-        const item = {} as any;
-        // throw with stack trace
-        item.balbala.run();
-      },
-      maxConcurrency: 10,
-      poolInternvalInMs: 200,
-      refillThresholdPct: 0.33,
-      plans: plans,
-    });
-
-    worker.start();
-    t.teardown(() => worker.stop());
+    t.plan(2);
+    const ee = new EventEmitter();
 
     const insertTask: InsertTask = createInsertTask(
       {
-        task_name: 'task',
+        task_name: 'happy-task',
+        queue: 'test',
         data: {},
-        queue: queue,
         config: {
           expireInSeconds: 10,
           retryBackoff: false,
@@ -285,58 +227,125 @@ tap.test('task worker', async (t) => {
         },
       },
       { type: 'direct' },
-      10
+      120
     );
 
-    t.equal(insertTask.cf.r_l, 1);
-
-    await query(sqlPool, plans.createTasks([insertTask]));
-
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    t.equal(called, 2);
-
-    const result = await sqlPool
-      .query(
-        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${insertTask.md.tn}' LIMIT 1`
-      )
-      .then((r) => r.rows[0]);
-
-    t.equal(result.state, TASK_STATES.failed);
-    t.equal(result.output.message, "Cannot read properties of undefined (reading 'run')");
-  });
-
-  t.test('expires', async (t) => {
-    const queue = 'expires';
-    let called = 0;
-    const plans = createPlans(schema, queue);
+    const remoteTask: SelectTask = {
+      config: insertTask.cf,
+      data: insertTask.d,
+      expire_in_seconds: insertTask.eis,
+      id: '222',
+      meta_data: insertTask.md,
+      retrycount: 0,
+      state: TASK_STATES.created,
+    };
 
     const worker = createTaskWorker({
-      client: sqlPool,
-      async handler({ expire_in_seconds }) {
-        called += 1;
-        await resolveWithinSeconds(new Promise((resolve) => setTimeout(resolve, 1500)), expire_in_seconds);
+      async popTasks(amount) {
+        if (remoteTask.state > TASK_STATES.retry) {
+          return [];
+        }
+        remoteTask.state = TASK_STATES.active;
+        return [remoteTask];
+      },
+      async resolveTask(task) {
+        t.equal(task.out.message, "Cannot read properties of undefined (reading 'run')");
+        remoteTask.retrycount += 1;
+        remoteTask.state = task.s;
+
+        if (task.s === TASK_STATES.failed) {
+          ee.emit('failed');
+        }
+      },
+      async handler(event) {
+        const item = {} as any;
+        // throw with stack trace
+        item.balbala.run();
       },
       maxConcurrency: 10,
       poolInternvalInMs: 100,
       refillThresholdPct: 0.33,
-      plans: plans,
     });
 
     worker.start();
     t.teardown(() => worker.stop());
 
-    const taskName = 'expired-task';
+    await once(ee, 'failed');
+  });
 
+  t.test('exponential backoff', async (t) => {
+    const ee = new EventEmitter();
     const insertTask: InsertTask = createInsertTask(
       {
-        task_name: taskName,
+        task_name: 'taskA',
         data: {},
-        queue: queue,
+        queue: 'queue',
+        config: {
+          expireInSeconds: 1,
+          retryBackoff: true,
+          retryLimit: 8,
+          retryDelay: 2,
+          singletonKey: null,
+          startAfterSeconds: 0,
+        },
+      },
+      { type: 'direct' },
+      10
+    );
+
+    const remoteTask: SelectTask = {
+      config: insertTask.cf,
+      data: insertTask.d,
+      expire_in_seconds: insertTask.eis,
+      id: '222',
+      meta_data: insertTask.md,
+      retrycount: 0,
+      state: TASK_STATES.created,
+    };
+
+    const worker = createTaskWorker({
+      async popTasks() {
+        if (remoteTask.state > TASK_STATES.retry) {
+          return [];
+        }
+        remoteTask.state = TASK_STATES.active;
+        return [remoteTask];
+      },
+      async resolveTask(task) {
+        if (task.s === TASK_STATES.failed) {
+          ee.emit('failed');
+          remoteTask.state = task.s;
+          return;
+        }
+
+        remoteTask.state = task.s;
+        remoteTask.retrycount += 1;
+        t.equal(task.saf, Math.pow(remoteTask.config.r_d, remoteTask.retrycount));
+      },
+      async handler() {
+        throw new Error('fail');
+      },
+      maxConcurrency: 10,
+      poolInternvalInMs: 20,
+      refillThresholdPct: 0.33,
+    });
+
+    worker.start();
+    t.teardown(() => worker.stop());
+    await once(ee, 'failed');
+  });
+
+  t.test('expires', async (t) => {
+    const ee = new EventEmitter();
+    const insertTask: InsertTask = createInsertTask(
+      {
+        task_name: 'taskA',
+        data: {},
+        queue: 'queue',
         config: {
           expireInSeconds: 1,
           retryBackoff: false,
-          retryLimit: 1,
+          retryLimit: 0,
           retryDelay: 1,
           singletonKey: null,
           startAfterSeconds: 0,
@@ -346,179 +355,208 @@ tap.test('task worker', async (t) => {
       10
     );
 
-    await query(sqlPool, plans.createTasks([insertTask]));
+    t.plan(3);
 
-    await new Promise((resolve) => setTimeout(resolve, 4000));
+    const remoteTask: SelectTask = {
+      config: insertTask.cf,
+      data: insertTask.d,
+      expire_in_seconds: insertTask.eis,
+      id: '222',
+      meta_data: insertTask.md,
+      retrycount: 0,
+      state: TASK_STATES.created,
+    };
 
-    t.equal(called, 2);
-
-    const result = await sqlPool
-      .query(
-        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${taskName}' LIMIT 1`
-      )
-      .then((r) => r.rows[0]);
-
-    t.equal(result.state, TASK_STATES.failed);
-    t.equal(result.output.message, 'handler execution exceeded 1000ms');
-  });
-});
-
-tap.test('maintaince worker', async (t) => {
-  t.jobs = 1;
-
-  const queue = 'maintaince_q';
-  const schema = 'maintaince_schema';
-  const plans = createPlans(schema, queue);
-
-  const tboss = createTaskBoss(queue);
-
-  const sqlPool = new Pool({
-    connectionString: connectionString,
-  });
-
-  await migrate(sqlPool, schema);
-
-  t.teardown(async () => {
-    await cleanupSchema(sqlPool, schema);
-    await sqlPool.end();
-  });
-
-  t.test('expires', async (t) => {
-    const worker = createMaintainceWorker({
-      client: sqlPool,
-      schema,
+    const worker = createTaskWorker({
+      async popTasks() {
+        if (remoteTask.state > TASK_STATES.retry) {
+          return [];
+        }
+        remoteTask.state = TASK_STATES.active;
+        return [remoteTask];
+      },
+      async resolveTask(task) {
+        remoteTask.state = task.s;
+        remoteTask.retrycount += 1;
+        t.equal(task.out.message, 'handler execution exceeded 1000ms');
+        t.equal(task.s, TASK_STATES.failed);
+        if (task.s === TASK_STATES.failed) {
+          ee.emit('failed');
+        }
+      },
+      async handler({ expire_in_seconds }) {
+        await resolveWithinSeconds(new Promise((resolve) => setTimeout(resolve, 1500)), expire_in_seconds);
+      },
+      maxConcurrency: 10,
+      poolInternvalInMs: 100,
+      refillThresholdPct: 0.33,
     });
 
     worker.start();
     t.teardown(() => worker.stop());
 
-    const outgoingTask = tboss.getTask({
-      task_name: 'expired-task-123',
-      config: {
-        expireInSeconds: 1,
-        retryBackoff: false,
-        retryLimit: 0,
-        retryDelay: 1,
-      },
-      data: {},
-    });
+    await once(ee, 'failed');
 
-    const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 120);
-
-    await query(sqlPool, plans.createTasks([insertTask]));
-
-    // mark the task as started
-    await query(sqlPool, plans.getAndStartTasks({ amount: 100 }));
-
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    worker.notify();
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    const result = await sqlPool
-      .query(
-        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = 'expired-task-123' LIMIT 1`
-      )
-      .then((r) => r.rows[0]);
-
-    t.equal(result.state, TASK_STATES.expired);
+    t.equal(remoteTask.state, TASK_STATES.failed);
   });
 
-  t.test('purges tasks', async (t) => {
-    const worker = createMaintainceWorker({
-      client: sqlPool,
-      schema,
-    });
+  tap.test('maintaince worker', async (t) => {
+    t.jobs = 1;
 
-    worker.start();
-    t.teardown(() => worker.stop());
-
-    const plans = createPlans(schema, queue);
-    const outgoingTask = tboss.getTask({
-      task_name: 'purges-task-worker',
-      config: {
-        retryBackoff: false,
-        retryLimit: 0,
-        retryDelay: 1,
-      },
-      data: {},
-    });
-
-    const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 0);
-
-    t.equal(insertTask.cf.ki_s, 0);
-    t.equal(insertTask.saf, 0);
-
-    await query(sqlPool, plans.createTasks([insertTask]));
-    // mark the task as started
-    const tasks = await query(sqlPool, plans.getAndStartTasks({ amount: 100 }));
-
-    const runnignTasks = await sqlPool.query(
-      `SELECT * FROM ${schema}.tasks WHERE  queue = '${queue}' AND meta_data->>'tn' = '${outgoingTask.task_name}'`
-    );
-
-    t.equal(runnignTasks.rowCount, 1);
-
-    // complete tasks
-    await query(
-      sqlPool,
-      plans.resolveTasks(
-        tasks.map((t) => ({
-          id: t.id,
-          s: TASK_STATES.completed,
-          out: undefined,
-        }))
-      )
-    );
-    {
-      const taskComlpeted = await sqlPool.query(
-        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${outgoingTask.task_name}'`
-      );
-
-      t.equal(taskComlpeted.rowCount, 1);
-    }
-
-    // triggers manual cleanup
-    worker.notify();
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
-    {
-      const taskComlpeted = await sqlPool.query(
-        `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${outgoingTask.task_name}'`
-      );
-
-      t.equal(taskComlpeted.rowCount, 0);
-    }
-  });
-
-  t.test('event retention', async (t) => {
-    const worker = createMaintainceWorker({
-      client: sqlPool,
-      schema,
-      cleanupInterval: 200,
-    });
-
+    const queue = 'maintaince_q';
+    const schema = 'maintaince_schema';
     const plans = createPlans(schema, queue);
 
-    await query(
-      sqlPool,
-      plans.createEvents([
-        { d: {}, e_n: 'event_retention_123', rid: -1 },
-        { d: { exists: true }, e_n: 'event_retention_123' },
-        { d: { exists: true }, e_n: 'event_retention_123', rid: 3 },
-      ])
-    );
+    const tboss = createTaskBoss(queue);
 
-    worker.start();
-    t.teardown(() => worker.stop());
+    const sqlPool = new Pool({
+      connectionString: connectionString,
+    });
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const r2 = await sqlPool.query(
-      `SELECT id, expire_at - now()::date as days FROM ${schema}.events WHERE event_name = 'event_retention_123' ORDER BY days desc`
-    );
-    t.equal(r2.rowCount, 2);
-    // default retention
-    t.equal(r2.rows[0].days, 30);
-    t.equal(r2.rows[1].days, 3);
+    await migrate(sqlPool, schema);
+
+    t.teardown(async () => {
+      await cleanupSchema(sqlPool, schema);
+      await sqlPool.end();
+    });
+
+    t.test('expires', async (t) => {
+      const worker = createMaintainceWorker({
+        client: sqlPool,
+        schema,
+      });
+
+      worker.start();
+      t.teardown(() => worker.stop());
+
+      const outgoingTask = tboss.getTask({
+        task_name: 'expired-task-123',
+        config: {
+          expireInSeconds: 1,
+          retryBackoff: false,
+          retryLimit: 0,
+          retryDelay: 1,
+        },
+        data: {},
+      });
+
+      const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 120);
+
+      await query(sqlPool, plans.createTasks([insertTask]));
+
+      // mark the task as started
+      await query(sqlPool, plans.getAndStartTasks(100));
+
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      worker.notify();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const result = await sqlPool
+        .query(
+          `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = 'expired-task-123' LIMIT 1`
+        )
+        .then((r) => r.rows[0]);
+
+      t.equal(result.state, TASK_STATES.expired);
+    });
+
+    t.test('purges tasks', async (t) => {
+      const worker = createMaintainceWorker({
+        client: sqlPool,
+        schema,
+      });
+
+      worker.start();
+      t.teardown(() => worker.stop());
+
+      const plans = createPlans(schema, queue);
+      const outgoingTask = tboss.getTask({
+        task_name: 'purges-task-worker',
+        config: {
+          retryBackoff: false,
+          retryLimit: 0,
+          retryDelay: 1,
+        },
+        data: {},
+      });
+
+      const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 0);
+
+      t.equal(insertTask.cf.ki_s, 0);
+      t.equal(insertTask.saf, 0);
+
+      await query(sqlPool, plans.createTasks([insertTask]));
+      // mark the task as started
+      const tasks = await query(sqlPool, plans.getAndStartTasks(100));
+
+      const runnignTasks = await sqlPool.query(
+        `SELECT * FROM ${schema}.tasks WHERE  queue = '${queue}' AND meta_data->>'tn' = '${outgoingTask.task_name}'`
+      );
+
+      t.equal(runnignTasks.rowCount, 1);
+
+      // complete tasks
+      await query(
+        sqlPool,
+        plans.resolveTasks(
+          tasks.map((t) => ({
+            id: t.id,
+            s: TASK_STATES.completed,
+            out: undefined,
+          }))
+        )
+      );
+      {
+        const taskComlpeted = await sqlPool.query(
+          `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${outgoingTask.task_name}'`
+        );
+
+        t.equal(taskComlpeted.rowCount, 1);
+      }
+
+      // triggers manual cleanup
+      worker.notify();
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      {
+        const taskComlpeted = await sqlPool.query(
+          `SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${outgoingTask.task_name}'`
+        );
+
+        t.equal(taskComlpeted.rowCount, 0);
+      }
+    });
+
+    t.test('event retention', async (t) => {
+      const worker = createMaintainceWorker({
+        client: sqlPool,
+        schema,
+        cleanupInterval: 200,
+      });
+
+      const plans = createPlans(schema, queue);
+
+      await query(
+        sqlPool,
+        plans.createEvents([
+          { d: {}, e_n: 'event_retention_123', rid: -1 },
+          { d: { exists: true }, e_n: 'event_retention_123' },
+          { d: { exists: true }, e_n: 'event_retention_123', rid: 3 },
+        ])
+      );
+
+      worker.start();
+      t.teardown(() => worker.stop());
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const r2 = await sqlPool.query(
+        `SELECT id, expire_at - now()::date as days FROM ${schema}.events WHERE event_name = 'event_retention_123' ORDER BY days desc`
+      );
+      t.equal(r2.rowCount, 2);
+      // default retention
+      t.equal(r2.rows[0].days, 30);
+      t.equal(r2.rows[1].days, 3);
+    });
   });
 });

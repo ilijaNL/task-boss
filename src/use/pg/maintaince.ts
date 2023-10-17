@@ -1,8 +1,7 @@
 import { Pool, PoolClient } from 'pg';
 import { createBaseWorker } from '../../worker';
-import { SelectTask, TASK_STATES, createResolveTasksQueryFn } from './plans';
+import { SelectTask, TASK_STATES, createResolveTasksQueryFn, getStartAfter } from './plans';
 import { createSql, query, withTransaction } from './sql';
-import { getStartAfter } from './task';
 
 const createPlans = (schema: string) => {
   const sql = createSql(schema);
@@ -59,7 +58,7 @@ export const createMaintainceWorker = (props: {
           return {
             id: expTask.id,
             s: newState,
-            saf: getStartAfter(expTask, newState),
+            saf: newState === TASK_STATES.retry ? getStartAfter(expTask) : undefined,
             out: undefined,
           };
         })
@@ -91,7 +90,11 @@ export const createMaintainceWorker = (props: {
       cleanupWorker.start();
     },
     async stop() {
-      await Promise.all([expireWorker.stop(), cleanupWorker.stop()]);
+      await Promise.all([
+        //
+        expireWorker.stop(),
+        cleanupWorker.stop(),
+      ]);
     },
   };
 };

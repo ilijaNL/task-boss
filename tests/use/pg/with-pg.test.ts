@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { withPG } from '../../../src/use/pg';
+import { TASK_STATES, withPG } from '../../../src/use/pg';
 import { cleanupSchema, createRandomSchema } from './helpers';
 import tap from 'tap';
 import { createTaskBoss } from '../../../src';
@@ -131,6 +131,153 @@ tap.test('with-pg', async (tap) => {
     same(result.output, {
       success: 'with result',
     });
+  });
+
+  // TODO: add postgres integration tests with retry & exponential backoff
+  tap.test('task retry', async (t) => {
+    t.plan(2);
+    const ee = new EventEmitter();
+    const queue = 'emit_tasks_retry';
+    const tb = createTaskBoss(queue);
+    const retryLimit = 2;
+
+    const task_name = 'emit_task_retry';
+    const taskDef = defineTask({
+      task_name: task_name,
+      config: {
+        retryLimit: retryLimit,
+        retryBackoff: false,
+        retryDelay: 1,
+      },
+      schema: Type.Object({ works: Type.String() }),
+    });
+
+    let handled = 0;
+
+    tb.registerTask(taskDef, {
+      handler: async (_, { retried }) => {
+        handled += 1;
+        if (handled === retryLimit + 1) {
+          ee.emit('handled');
+          t.equal(retried, retryLimit);
+          return;
+        }
+
+        throw new Error('fail');
+      },
+    });
+
+    const pgTasks = withPG(tb, { db: sqlPool, schema: schema });
+
+    await pgTasks.start();
+    t.teardown(() => pgTasks.stop());
+
+    await pgTasks.send(taskDef.from({ works: 'abcd' }));
+    await once(ee, 'handled');
+    // 1 normal and 2 retries
+    t.equal(handled, retryLimit + 1);
+  });
+
+  tap.test('task completes with correct metadata', async (t) => {
+    const ee = new EventEmitter();
+    const queue = 'emit_tasks_completes';
+    const tb = createTaskBoss(queue);
+    const retryLimit = 1;
+
+    const task_name = 'emit_task_completes';
+    const taskDef = defineTask({
+      task_name: task_name,
+      config: {
+        retryLimit: retryLimit,
+        retryBackoff: false,
+        retryDelay: 1,
+      },
+      schema: Type.Object({ works: Type.String() }),
+    });
+
+    tb.registerTask(taskDef, {
+      handler: async (_, { retried }) => {
+        if (retried === retryLimit) {
+          ee.emit('handled');
+          return {
+            success: true,
+          };
+        }
+
+        throw new Error('fail');
+      },
+    });
+
+    const pgTasks = withPG(tb, { db: sqlPool, schema: schema });
+
+    await pgTasks.start();
+    t.teardown(() => pgTasks.stop());
+
+    await pgTasks.send(taskDef.from({ works: 'abcd' }));
+    await once(ee, 'handled');
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    const result = await sqlPool
+      .query(`SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${task_name}'`)
+      .then((r) => r.rows[0]!);
+
+    t.equal(result.state, TASK_STATES.completed);
+    t.equal(result.retrycount, retryLimit);
+    t.same(result.output, {
+      success: true,
+    });
+  });
+
+  tap.test('task exponential backoff', async (t) => {
+    t.plan(3);
+    const ee = new EventEmitter();
+    const queue = 'emit_tasks_exp_backoff';
+    const tb = createTaskBoss(queue);
+    const retryLimit = 2;
+    const baseDelay = 2;
+
+    const task_name = 'emit_task_exp_backoff';
+    const taskDef = defineTask({
+      task_name: task_name,
+      config: {
+        retryLimit: retryLimit,
+        retryBackoff: true,
+        retryDelay: baseDelay,
+      },
+      schema: Type.Object({ works: Type.String() }),
+    });
+
+    let handled = 0;
+    let currentTime = Date.now();
+
+    tb.registerTask(taskDef, {
+      handler: async (_, { retried }) => {
+        // only check after first handle since it happens immediatly
+        if (handled > 0) {
+          t.equal(Date.now() - currentTime > Math.pow(baseDelay, retried) * 1000, true);
+        }
+
+        currentTime = Date.now();
+        handled += 1;
+        if (handled === retryLimit + 1) {
+          ee.emit('handled');
+          return;
+        }
+
+        throw new Error('fail');
+      },
+    });
+
+    const pgTasks = withPG(tb, { db: sqlPool, schema: schema, worker: { intervalInMs: 100 } });
+
+    await pgTasks.start();
+    t.teardown(() => pgTasks.stop());
+
+    await pgTasks.send(taskDef.from({ works: 'abcd' }));
+    await once(ee, 'handled');
+    // 1 normal and x retries
+    t.equal(handled, retryLimit + 1);
   });
 
   tap.test('emit tasks with resolve', async ({ teardown, equal, same }) => {
