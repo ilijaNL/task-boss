@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { createSql, query, withTransaction } from './sql';
 import { Pool } from 'pg';
+import { TASK_STATES } from './plans';
 
 const migrationTable = 'tb_migrations';
 
@@ -116,15 +117,15 @@ export const createMigrationStore = (schema: string) => [
           FROM ${schema}.tasks _t
           WHERE _t.queue = target_q
             AND _t.startAfter < now()
-            AND _t.state < 2
+            AND _t.state < ${TASK_STATES.active}
           ORDER BY _t.createdOn ASC
           LIMIT amount
           FOR UPDATE SKIP LOCKED
         ) UPDATE ${schema}.tasks t 
           SET
-            state = 2,
+            state = ${TASK_STATES.active},
             startedOn = now(),
-            retryCount = CASE WHEN t.state = 1
+            retryCount = CASE WHEN t.state = ${TASK_STATES.retry}
                           THEN t.retryCount + 1 
                           ELSE t.retryCount END
           FROM _tasks
@@ -135,7 +136,7 @@ export const createMigrationStore = (schema: string) => [
     $$ LANGUAGE 'plpgsql';
 
     CREATE OR REPLACE FUNCTION ${schema}.create_bus_tasks(tasks jsonb)
-      RETURNS SETOF ${schema}.tasks AS $$
+      RETURNS void AS $$
       BEGIN
         INSERT INTO ${schema}.tasks (
           "queue",
@@ -149,7 +150,7 @@ export const createMigrationStore = (schema: string) => [
         )
         SELECT
           "q" as "queue",
-          COALESCE("s", 0) as "state",
+          COALESCE("s", ${TASK_STATES.created}) as "state",
           "d" as "data",
           "md" as meta_data,
           "cf" as config,
@@ -169,10 +170,10 @@ export const createMigrationStore = (schema: string) => [
         ON CONFLICT DO NOTHING;
         RETURN;
       END
-    $$ LANGUAGE 'plpgsql';  
+    $$ LANGUAGE 'plpgsql' VOLATILE;  
 
     CREATE OR REPLACE FUNCTION ${schema}.create_bus_events(events jsonb)
-      RETURNS SETOF ${schema}.events
+    RETURNS void
       AS $$
     BEGIN
       INSERT INTO ${schema}.events (
@@ -191,7 +192,71 @@ export const createMigrationStore = (schema: string) => [
       );
       RETURN;
     END;
-    $$ LANGUAGE 'plpgsql';
+    $$ LANGUAGE 'plpgsql' VOLATILE;
+
+    CREATE OR REPLACE FUNCTION ${schema}.resolve_tasks(tasks jsonb)
+      RETURNS void
+      AS $$
+    BEGIN
+      WITH _in as (
+        SELECT 
+          x.id as task_id,
+          x.s as new_state,
+          x.out as out,
+          x.saf as saf
+        FROM jsonb_to_recordset(tasks) as x(
+          id bigint,
+          s smallint,
+          out jsonb,
+          saf integer
+        )
+      ), compl as (
+        DELETE FROM ${schema}.tasks t
+        WHERE t.id in (SELECT task_id FROM _in WHERE _in.new_state > ${TASK_STATES.active})
+          AND t.state = ${TASK_STATES.active}
+        RETURNING t.*
+      ), _completed_tasks as (
+        INSERT INTO ${schema}.tasks_completed (
+          id,
+          queue,
+          state,
+          data,
+          meta_data,
+          config,
+          output,
+          retryCount,
+          startedOn,
+          createdOn,
+          completedOn,
+          keepUntil
+        ) (SELECT 
+          compl.id,
+          compl.queue,
+          _in.new_state,
+          compl.data,
+          compl.meta_data,
+          compl.config,
+          COALESCE(_in.out, compl.output),
+          compl.retryCount,
+          compl.startedOn,
+          compl.createdOn,
+          now(),
+          (now() + (COALESCE((compl.config->>'ki_s')::integer, 60 * 60 * 24 * 7) * interval '1s'))
+          FROM compl INNER JOIN _in ON _in.task_id = compl.id)
+          RETURNING id
+      ) UPDATE ${schema}.tasks t
+        SET
+          state = _in.new_state,
+          startAfter = (now() + (_in.saf * interval '1s')),
+          output = _in.out
+        FROM _in
+        WHERE t.id = _in.task_id
+          AND _in.new_state = ${TASK_STATES.retry}
+          AND t.state = ${TASK_STATES.active};
+
+      RETURN;
+    END;
+    $$ LANGUAGE 'plpgsql' VOLATILE;
   `,
 ];
 
