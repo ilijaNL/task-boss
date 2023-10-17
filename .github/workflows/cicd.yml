@@ -7,7 +7,7 @@ on:
     paths-ignore:
       - 'docs/**'
       - 'example/**'
-      - '*.md'
+      - '**/*.md'
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
