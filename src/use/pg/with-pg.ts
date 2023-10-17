@@ -3,7 +3,7 @@ import { BaseClient, TaskBoss } from '../../task-boss';
 import { TEvent, Task } from '../../definitions';
 import { QueryCommand, query, withTransaction } from './sql';
 import { migrate } from './migrations';
-import { InsertTask, createPlans, createInsertTask, ResolvedTask, TASK_STATES } from './plans';
+import { InsertTask, createPlans, createInsertTask, ResolvedTask } from './plans';
 import { createMaintainceWorker } from './maintaince';
 import { createBaseWorker } from '../../worker';
 import { createTaskWorker } from './task';

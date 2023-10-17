@@ -137,64 +137,9 @@ export const createInsertTask = (task: OutgoingTask, trigger: TaskTrigger, keepI
 
 export type ResolvedTask = { id: string; s: TaskState; out: any; saf?: number };
 
+// Todo: move this to postgres procedure
 export const createResolveTasksQueryFn = (sql: SchemaSQL) => (tasks: Array<ResolvedTask>) =>
-  sql`
-WITH _in as (
-  SELECT 
-    x.id as task_id,
-    x.s as new_state,
-    x.out as out,
-    x.saf as saf
-  FROM json_to_recordset(${JSON.stringify(tasks)}) as x(
-    id bigint,
-    s smallint,
-    out jsonb,
-    saf integer
-  )
-), compl as (
-  DELETE FROM {{schema}}.tasks t
-  WHERE t.id in (SELECT task_id FROM _in WHERE _in.new_state > ${TASK_STATES.active})
-    AND t.state = ${TASK_STATES.active}
-  RETURNING t.*
-), _completed_tasks as (
-  INSERT INTO {{schema}}.tasks_completed (
-    id,
-    queue,
-    state,
-    data,
-    meta_data,
-    config,
-    output,
-    retryCount,
-    startedOn,
-    createdOn,
-    completedOn,
-    keepUntil
-  ) (SELECT 
-    compl.id,
-    compl.queue,
-    _in.new_state,
-    compl.data,
-    compl.meta_data,
-    compl.config,
-    COALESCE(_in.out, compl.output),
-    compl.retryCount,
-    compl.startedOn,
-    compl.createdOn,
-    now(),
-    (now() + (COALESCE((compl.config->>'ki_s')::integer, 60 * 60 * 24 * 7) * interval '1s'))
-    FROM compl INNER JOIN _in ON _in.task_id = compl.id)
-    RETURNING id
-) UPDATE {{schema}}.tasks t
-  SET
-    state = _in.new_state,
-    startAfter = (now() + (_in.saf * interval '1s')),
-    output = _in.out
-  FROM _in
-  WHERE t.id = _in.task_id
-    AND _in.new_state = ${TASK_STATES.retry}
-    AND t.state = ${TASK_STATES.active}
-`;
+  sql`SELECT {{schema}}.resolve_tasks(${JSON.stringify(tasks)}::jsonb)`;
 
 export const createPlans = (schema: string, queue: string) => {
   const sql = createSql(schema);
