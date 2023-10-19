@@ -1,7 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import tap from 'tap';
 import stringify from 'safe-stable-stringify';
-import { createTaskClient, defineEvent, defineTask, createTaskBoss } from '../src/';
+import { createTaskBuilder, defineEvent, defineTask, createTaskBoss } from '../src/';
 
 tap.test('task-boss', async (tap) => {
   tap.jobs = 5;
@@ -216,7 +216,7 @@ tap.test('task-boss', async (tap) => {
   tap.test('task options merge', async ({ equal }) => {
     const queue = `task_options`;
     const taskBoss = createTaskBoss(queue, {
-      handlerConfig: {
+      taskOverrideConfig: {
         retryDelay: 212,
       },
     });
@@ -257,7 +257,7 @@ tap.test('task-boss', async (tap) => {
   tap.test('on event options', async ({ equal }) => {
     const queue = 'handler-options';
     const taskboss = createTaskBoss(queue, {
-      handlerConfig: {
+      taskOverrideConfig: {
         expireInSeconds: 33,
         retryBackoff: false,
       },
@@ -338,7 +338,7 @@ tap.test('task-boss', async (tap) => {
 tap.test('taskclient', async (t) => {
   const bus = createTaskBoss('queueA');
 
-  const client = createTaskClient('queueA')
+  const client = createTaskBuilder('queueA')
     .defineTask({
       name: 'test',
       schema: Type.Object({ n: Type.Number({ minimum: 2 }) }),
@@ -352,11 +352,12 @@ tap.test('taskclient', async (t) => {
       config: {
         retryDelay: 10,
       },
-    });
+    })
+    .compile();
 
-  t.throws(() => client.defs.test.from({ n: 1 }));
+  t.throws(() => client.test.from({ n: 1 }));
 
-  t.same(client.defs.test.from({ n: 2 }), {
+  t.same(client.test.from({ n: 2 }), {
     queue: 'queueA',
     task_name: 'test',
     data: {
@@ -366,7 +367,7 @@ tap.test('taskclient', async (t) => {
       retryDelay: 20,
     },
   });
-  t.same(client.defs.abc.from({ n: 'abc' }), {
+  t.same(client.abc.from({ n: 'abc' }), {
     queue: 'queueA',
     task_name: 'abc',
     data: {
@@ -393,13 +394,15 @@ tap.test('taskclient', async (t) => {
 tap.test('taskclient throws with different queue', async (t) => {
   const bus = createTaskBoss('queueA');
 
-  const client = createTaskClient('queueB').defineTask({
-    name: 'test',
-    schema: Type.Object({ n: Type.Number({ minimum: 2 }) }),
-    config: {
-      retryDelay: 20,
-    },
-  });
+  const client = createTaskBuilder('queueB')
+    .defineTask({
+      name: 'test',
+      schema: Type.Object({ n: Type.Number({ minimum: 2 }) }),
+      config: {
+        retryDelay: 20,
+      },
+    })
+    .compile();
 
   t.throws(() =>
     bus.registerTaskClient(client, {

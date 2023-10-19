@@ -137,12 +137,7 @@ export const createInsertTask = (task: OutgoingTask, trigger: TaskTrigger, keepI
 
 export type ResolvedTask = { id: string; s: TaskState; out: any; saf?: number };
 
-// Todo: move this to postgres procedure
-export const createResolveTasksQueryFn = (sql: SchemaSQL) => (tasks: Array<ResolvedTask>) =>
-  sql`SELECT {{schema}}.resolve_tasks(${JSON.stringify(tasks)}::jsonb)`;
-
-export const createPlans = (schema: string, queue: string) => {
-  const sql = createSql(schema);
+export const createInsertPlans = (sql: SchemaSQL) => {
   function createTasks(tasks: InsertTask[]) {
     return sql<{}>`SELECT {{schema}}.create_bus_tasks(${JSON.stringify(tasks)}::jsonb)`;
   }
@@ -150,6 +145,16 @@ export const createPlans = (schema: string, queue: string) => {
   function createEvents(events: InsertEvent[]) {
     return sql`SELECT {{schema}}.create_bus_events(${JSON.stringify(events)}::jsonb)`;
   }
+
+  return {
+    createEvents,
+    createTasks,
+  };
+};
+
+export const createPlans = (schema: string) => {
+  const sql = createSql(schema);
+  const { createEvents, createTasks } = createInsertPlans(sql);
 
   function getLastEvent() {
     return sql<{ id: string; position: string }>`
@@ -166,7 +171,7 @@ export const createPlans = (schema: string, queue: string) => {
   /**
    *  On new queue entry, insert a cursor
    */
-  function ensureQueuePointer(position: number) {
+  function ensureQueuePointer(queue: string, position: number) {
     return sql`
       INSERT INTO {{schema}}.cursors (svc, l_p) 
       VALUES (${queue}, ${position}) 
@@ -174,7 +179,7 @@ export const createPlans = (schema: string, queue: string) => {
   }
 
   // combine into single query (CTE) to reduce round trips
-  function createTasksAndSetCursor(tasks: InsertTask[], last_position: number) {
+  function createTasksAndSetCursor(queue: string, tasks: InsertTask[], last_position: number) {
     return sql`
       with _cu as (
         UPDATE {{schema}}.cursors 
@@ -185,7 +190,7 @@ export const createPlans = (schema: string, queue: string) => {
   }
 
   // the pos > 0 is needed to have an index scan on events table
-  function getCursorLockEvents(limit: number) {
+  function getCursorLockEvents(queue: string, limit: number) {
     const events = sql<SelectEvent>`
       SELECT 
         id, 
@@ -210,13 +215,13 @@ export const createPlans = (schema: string, queue: string) => {
   }
 
   return {
+    createEvents,
     createTasks,
     getLastEvent,
     ensureQueuePointer: ensureQueuePointer,
     createTasksAndSetCursor,
     getCursorLockEvents,
-    createEvents,
-    getAndStartTasks: (amount: number) => sql<SelectTask>`
+    getAndStartTasks: (queue: string, amount: number) => sql<SelectTask>`
       SELECT
         id,
         retryCount,
@@ -227,6 +232,29 @@ export const createPlans = (schema: string, queue: string) => {
         expire_in_seconds
       FROM {{schema}}.get_tasks(${queue}, ${amount}::integer)
     `,
-    resolveTasks: createResolveTasksQueryFn(sql),
+    resolveTasks: (tasks: Array<ResolvedTask>) => sql`SELECT {{schema}}.resolve_tasks(${JSON.stringify(tasks)}::jsonb)`,
+    get_expired_tasks: (limit: number) => sql<SelectTask>`
+      SELECT
+        id,
+        retryCount,
+        state,
+        data,
+        meta_data,
+        config,
+        (EXTRACT(epoch FROM expireIn))::int as expire_in_seconds
+      FROM {{schema}}.tasks
+        WHERE state = ${TASK_STATES.active}
+          AND (startedOn + expireIn) < now()
+      ORDER BY startedOn ASC
+      LIMIT ${limit}
+      FOR UPDATE SKIP LOCKED
+    `,
+    purgeTasks: () => sql`
+      DELETE FROM {{schema}}.tasks_completed
+      WHERE keepUntil < now()
+    `,
+    deleteOldEvents: () => sql`
+      DELETE FROM {{schema}}.events WHERE expire_at < now()
+    `,
   };
 };

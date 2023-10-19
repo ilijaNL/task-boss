@@ -1,16 +1,17 @@
 import { Pool } from 'pg';
-import { TASK_STATES, withPG } from '../../../src/use/pg';
+import { withPG } from '../../../src/use/pg';
 import { cleanupSchema, createRandomSchema } from './helpers';
-import tap from 'tap';
+import t from 'tap';
 import { createTaskBoss } from '../../../src';
 import EventEmitter, { once } from 'node:events';
 import { defineEvent, defineTask } from '../../../src/definitions';
 import { Type } from '@sinclair/typebox';
 import { resolveWithinSeconds } from '../../../src/utils';
+import { TASK_STATES } from '../../../src/use/pg/plans';
 
 const connectionString = process.env.PG ?? 'postgres://postgres:postgres@localhost:5432/app';
 
-tap.test('concurrency start', async (tap) => {
+t.test('concurrency start', async (t) => {
   const schema = createRandomSchema();
   const sqlPool = new Pool({
     connectionString: connectionString,
@@ -52,7 +53,7 @@ tap.test('concurrency start', async (tap) => {
 
   await clients[0].send(taskDef.from({}), taskDef.from({}));
 
-  tap.teardown(async () => {
+  t.teardown(async () => {
     await Promise.all(clients.map((c) => c.stop()));
     await cleanupSchema(sqlPool, schema);
     await sqlPool.end();
@@ -63,8 +64,8 @@ tap.test('concurrency start', async (tap) => {
   await prm;
 });
 
-tap.test('with-pg', async (tap) => {
-  tap.jobs = 5;
+t.test('with-pg', async (t) => {
+  t.jobs = 5;
   const schema = createRandomSchema();
 
   const sqlPool = new Pool({
@@ -72,12 +73,12 @@ tap.test('with-pg', async (tap) => {
     max: 5,
   });
 
-  tap.teardown(async () => {
+  t.teardown(async () => {
     await cleanupSchema(sqlPool, schema);
     await sqlPool.end();
   });
 
-  tap.test('smoke test', async ({ pass }) => {
+  t.test('smoke test', async ({ pass }) => {
     const pgTasks = withPG(createTaskBoss('smoke_test'), { db: sqlPool, schema: schema });
 
     await pgTasks.start();
@@ -85,7 +86,7 @@ tap.test('with-pg', async (tap) => {
     pass('passes');
   });
 
-  tap.test('emit tasks', async ({ teardown, equal, same }) => {
+  t.test('emit tasks', async ({ teardown, equal, same }) => {
     const ee = new EventEmitter();
     const queue = 'emit_tasks_result';
     const tb = createTaskBoss(queue);
@@ -134,7 +135,7 @@ tap.test('with-pg', async (tap) => {
   });
 
   // TODO: add postgres integration tests with retry & exponential backoff
-  tap.test('task retry', async (t) => {
+  t.test('task retry', async (t) => {
     t.plan(2);
     const ee = new EventEmitter();
     const queue = 'emit_tasks_retry';
@@ -178,7 +179,7 @@ tap.test('with-pg', async (tap) => {
     t.equal(handled, retryLimit + 1);
   });
 
-  tap.test('task completes with correct metadata', async (t) => {
+  t.test('task completes with correct metadata', async (t) => {
     const ee = new EventEmitter();
     const queue = 'emit_tasks_completes';
     const tb = createTaskBoss(queue);
@@ -229,7 +230,7 @@ tap.test('with-pg', async (tap) => {
     });
   });
 
-  tap.test('task exponential backoff', async (t) => {
+  t.test('task exponential backoff', async (t) => {
     t.plan(3);
     const ee = new EventEmitter();
     const queue = 'emit_tasks_exp_backoff';
@@ -280,7 +281,7 @@ tap.test('with-pg', async (tap) => {
     t.equal(handled, retryLimit + 1);
   });
 
-  tap.test('emit tasks with resolve', async ({ teardown, equal, same }) => {
+  t.test('emit tasks with resolve', async ({ teardown, equal, same }) => {
     const ee = new EventEmitter();
     const queue = 'emit_tasks_result_resolve';
     const tb = createTaskBoss(queue);
@@ -333,7 +334,7 @@ tap.test('with-pg', async (tap) => {
     });
   });
 
-  tap.test('stores error as result on task handler throw', async ({ teardown, equal, ok }) => {
+  t.test('stores error as result on task handler throw', async ({ teardown, equal, ok }) => {
     const ee = new EventEmitter();
     const queue = 'emit_tasks_error';
     const tb = createTaskBoss(queue);
@@ -372,7 +373,7 @@ tap.test('with-pg', async (tap) => {
     ok(!!result.output.stack);
   });
 
-  tap.test('fail manually', async ({ teardown, same }) => {
+  t.test('fail manually', async ({ teardown, same }) => {
     const ee = new EventEmitter();
     const queue = 'emit_tasks_error_fail';
     const tb = createTaskBoss(queue);
@@ -413,7 +414,7 @@ tap.test('with-pg', async (tap) => {
     same(result.output, { custom_payload: 123 });
   });
 
-  tap.test('emit event', async (t) => {
+  t.test('emit event', async (t) => {
     const ee = new EventEmitter();
     const tb = createTaskBoss('emit_event_queue');
     // const bus = createTBus('emit_event_queue', { db: sqlPool, schema: schema });
@@ -478,7 +479,7 @@ tap.test('with-pg', async (tap) => {
     );
   });
 
-  tap.test('singleton task', async ({ teardown, equal }) => {
+  t.test('singleton task', async ({ teardown, equal }) => {
     const queue = `singleton_task`;
     const tb = createTaskBoss(queue);
     const taskName = 'singleton_task';
@@ -517,7 +518,7 @@ tap.test('with-pg', async (tap) => {
     equal(result.length, 1);
   });
 
-  tap.test('event handler singleton from payload', async ({ teardown, equal }) => {
+  t.test('event handler singleton from payload', async ({ teardown, equal }) => {
     const queue = `singleton_queue_payload`;
     const schema = createRandomSchema();
     // const bus = createTBus(queue, { db: sqlPool, schema: schema, worker: { intervalInMs: 200 } });
@@ -577,7 +578,7 @@ tap.test('with-pg', async (tap) => {
     );
   });
 
-  tap.test('when registering new service, add last event as cursor', async ({ equal, teardown }) => {
+  t.test('when registering new service, add last event as cursor', async ({ equal, teardown }) => {
     const schema = createRandomSchema();
     const event = defineEvent({
       event_name: 'test_event',
@@ -604,7 +605,7 @@ tap.test('with-pg', async (tap) => {
     equal(result.rows[0]?.l_p, '2');
   });
 
-  tap.test('cursor', async ({ teardown, equal }) => {
+  t.test('cursor', async ({ teardown, equal }) => {
     const ee = new EventEmitter();
     const schema = createRandomSchema();
     const queue = 'cursorservice';
