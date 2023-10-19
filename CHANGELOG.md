@@ -1,5 +1,11 @@
 # task-boss
 
+## 0.0.9
+
+### Patch Changes
+
+- 408dc8d: Improve performance & TaskBuilder
+
 ## 0.0.8
 
 ### Patch Changes
