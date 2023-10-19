@@ -1,38 +1,7 @@
 import { Pool, PoolClient } from 'pg';
 import { createBaseWorker } from '../../worker';
-import { SelectTask, TASK_STATES, createResolveTasksQueryFn, getStartAfter } from './plans';
-import { createSql, query, withTransaction } from './sql';
-
-const createPlans = (schema: string) => {
-  const sql = createSql(schema);
-
-  return {
-    resolve_tasks: createResolveTasksQueryFn(sql),
-    get_expired_tasks: (limit: number) => sql<SelectTask>`
-      SELECT
-        id,
-        retryCount,
-        state,
-        data,
-        meta_data,
-        config,
-        (EXTRACT(epoch FROM expireIn))::int as expire_in_seconds
-      FROM {{schema}}.tasks
-        WHERE state = ${TASK_STATES.active}
-          AND (startedOn + expireIn) < now()
-      ORDER BY startedOn ASC
-      LIMIT ${limit}
-      FOR UPDATE SKIP LOCKED
-    `,
-    purgeTasks: () => sql`
-      DELETE FROM {{schema}}.tasks_completed
-      WHERE keepUntil < now()
-    `,
-    deleteOldEvents: () => sql`
-      DELETE FROM {{schema}}.events WHERE expire_at < now()
-    `,
-  };
-};
+import { TASK_STATES, createPlans, getStartAfter } from './plans';
+import { query, withTransaction } from './sql';
 
 export const createMaintainceWorker = (props: {
   schema: string;
@@ -52,7 +21,7 @@ export const createMaintainceWorker = (props: {
     // update
     await query(
       client,
-      plans.resolve_tasks(
+      plans.resolveTasks(
         tasks.map((expTask) => {
           const newState =
             expTask.retrycount >= expTask.config.r_l

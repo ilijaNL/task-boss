@@ -1,14 +1,53 @@
 import { Pool, PoolConfig } from 'pg';
-import { BaseClient, TaskBoss } from '../../task-boss';
+import { BaseClient, OutgoingTask, TaskBoss, TaskOverrideConfig, createTaskFactory } from '../../task-boss';
 import { TEvent, Task } from '../../definitions';
-import { QueryCommand, query, withTransaction } from './sql';
+import { QueryCommand, createSql, query, withTransaction } from './sql';
 import { migrate } from './migrations';
-import { InsertTask, createPlans, createInsertTask, ResolvedTask } from './plans';
+import { InsertTask, createPlans, createInsertTask, ResolvedTask, createInsertPlans } from './plans';
 import { createMaintainceWorker } from './maintaince';
 import { createBaseWorker } from '../../worker';
 import { createTaskWorker } from './task';
 import { DeferredPromise, JsonValue, debounce } from '../../utils';
 import { createBatcher } from 'node-batcher';
+
+function _createTaskToCommandFactory(
+  schema: string,
+  taskFactory: (task: Task<JsonValue>) => OutgoingTask,
+  opts: {
+    keepInSeconds: number;
+  }
+) {
+  const plans = createInsertPlans(createSql(schema));
+
+  return function toCommands(...task: Task[]): QueryCommand<{}> {
+    return plans.createTasks(task.map((t) => createInsertTask(taskFactory(t), directTask, opts.keepInSeconds)));
+  };
+}
+
+export function createTaskToCommandFactory(
+  schema: string,
+  queue: string,
+  opts: {
+    taskOverrideConfig?: TaskOverrideConfig;
+    keepInSeconds?: number;
+  }
+) {
+  return _createTaskToCommandFactory(schema, createTaskFactory(queue, opts.taskOverrideConfig), {
+    keepInSeconds: opts.keepInSeconds ?? defaultKeepInSeconds,
+  });
+}
+
+export function createEventToCommandFactory(
+  schema: string,
+  opts: {
+    retentionInDays: number;
+  }
+) {
+  const plans = createInsertPlans(createSql(schema));
+  return function toCommands(...events: TEvent<string>[]): QueryCommand<{}> {
+    return plans.createEvents(events.map((e) => ({ d: e.data, e_n: e.event_name, rid: opts.retentionInDays })));
+  };
+}
 
 export type WorkerConfig = {
   /**
@@ -35,13 +74,16 @@ export interface PGTaskBoss extends BaseClient {
    * Gracefully stops all the workers of task-boss.
    */
   stop: () => Promise<void>;
-  getPublishCommand: (events: TEvent<string, any>[]) => QueryCommand<{}>;
-  getSendCommand: (tasks: Task[]) => QueryCommand<{}>;
+  getPublishCommand: (...events: TEvent<string, any>[]) => QueryCommand<{}>;
+  getSendCommand: (...tasks: Task[]) => QueryCommand<unknown>;
 }
 
-const directTask = Object.freeze({
+export const directTask = Object.freeze({
   type: 'direct',
 });
+
+export const defaultKeepInSeconds = 7 * 24 * 60 * 60;
+export const defaultEventRetentionInDays = 30;
 
 export const withPG = (
   taskBoss: TaskBoss,
@@ -70,7 +112,7 @@ export const withPG = (
     keepInSeconds?: number;
   }
 ): PGTaskBoss => {
-  const { schema, db, worker, retention_in_days = 30, keepInSeconds = 7 * 24 * 60 * 60 } = opts;
+  const { schema, db, worker, retention_in_days, keepInSeconds = defaultKeepInSeconds } = opts;
 
   const workerConfig = Object.assign<WorkerConfig, Partial<WorkerConfig>>(
     {
@@ -81,7 +123,7 @@ export const withPG = (
     worker ?? {}
   );
 
-  const sqlPlans = createPlans(schema, taskBoss.queue);
+  const sqlPlans = createPlans(schema);
 
   const state = {
     started: false,
@@ -114,7 +156,7 @@ export const withPG = (
     // dont make to big since payload can be big
     maxSize: 75,
     // keep it low latency
-    maxTimeInMs: 50,
+    maxTimeInMs: 30,
   });
 
   const tWorker = createTaskWorker({
@@ -122,7 +164,7 @@ export const withPG = (
     poolInternvalInMs: workerConfig.intervalInMs,
     refillThresholdPct: workerConfig.refillFactor,
     async popTasks(amount) {
-      return query(pool, sqlPlans.getAndStartTasks(amount));
+      return query(pool, sqlPlans.getAndStartTasks(taskBoss.queue, amount));
     },
     async resolveTask(task) {
       await resolveTaskBatcher.add(task);
@@ -162,7 +204,7 @@ export const withPG = (
     async () => {
       const fetchSize = 200;
       const trxResult = await withTransaction<{ hasMore: boolean; hasChanged: boolean }>(pool, async (client) => {
-        const events = await query(client, sqlPlans.getCursorLockEvents(fetchSize));
+        const events = await query(client, sqlPlans.getCursorLockEvents(taskBoss.queue, fetchSize));
         // nothing to do
         if (events.length === 0) {
           // update cursor to the latest point
@@ -193,7 +235,7 @@ export const withPG = (
           return agg;
         }, [] as Array<InsertTask>);
 
-        await query(client, sqlPlans.createTasksAndSetCursor(insertTasks, newCursor));
+        await query(client, sqlPlans.createTasksAndSetCursor(taskBoss.queue, insertTasks, newCursor));
 
         return {
           hasChanged: insertTasks.length > 0,
@@ -213,21 +255,13 @@ export const withPG = (
   const notifyFanout = debounce(() => fanoutWorker.notify(), { ms: 75, maxMs: 300 });
   const notifyWorker = debounce(() => tWorker.notify(), { ms: 75, maxMs: 150 });
 
-  /**
-   * Returnes a query command which can be used to do manual submitting
-   */
-  function getPublishCommand(events: TEvent<string>[]): QueryCommand<{}> {
-    return sqlPlans.createEvents(events.map((e) => ({ d: e.data, e_n: e.event_name, rid: retention_in_days })));
-  }
+  const eventsToCommandFactory = createEventToCommandFactory(schema, {
+    retentionInDays: retention_in_days ?? defaultEventRetentionInDays,
+  });
 
-  /**
-   * Returnes a query command which can be used to do manual submitting
-   */
-  function getSendCommand(tasks: Task[]): QueryCommand<{}> {
-    return sqlPlans.createTasks(
-      tasks.map<InsertTask>((_task) => createInsertTask(taskBoss.getTask(_task), directTask, keepInSeconds))
-    );
-  }
+  const taskToCommandFactory = _createTaskToCommandFactory(schema, taskBoss.getTask, {
+    keepInSeconds: defaultKeepInSeconds,
+  });
 
   function shouldNotifyTaskWorker(t: Task<JsonValue>) {
     return (t.queue === taskBoss.queue || !t.queue) && !t.config.startAfterSeconds;
@@ -235,10 +269,10 @@ export const withPG = (
 
   return {
     getState: taskBoss.getState,
-    getPublishCommand: getPublishCommand,
-    getSendCommand: getSendCommand,
+    getPublishCommand: eventsToCommandFactory,
+    getSendCommand: taskToCommandFactory,
     async send(...tasks) {
-      await query(pool, getSendCommand(tasks));
+      await query(pool, taskToCommandFactory(...tasks));
 
       // check if instance is affected by the new tasks
       // if queue is not specified, it means we will create task for this instance
@@ -249,7 +283,7 @@ export const withPG = (
       }
     },
     async publish(...events) {
-      await query(pool, getPublishCommand(events));
+      await query(pool, eventsToCommandFactory(...events));
       const taskBossEvents = taskBoss.getState().events;
       // check if instance is affected by the published events
       const hasEffectToCurrentWorker = events.some((e) => taskBossEvents.some((ee) => ee.event_name === e.event_name));
@@ -268,7 +302,7 @@ export const withPG = (
       await migrate(pool, schema);
 
       const lastCursor = (await query(pool, sqlPlans.getLastEvent()))[0];
-      await query(pool, sqlPlans.ensureQueuePointer(+(lastCursor?.position ?? 0)));
+      await query(pool, sqlPlans.ensureQueuePointer(taskBoss.queue, +(lastCursor?.position ?? 0)));
 
       tWorker.start();
       fanoutWorker.start();

@@ -405,8 +405,7 @@ tap.test('task worker', async (t) => {
 
     const queue = 'maintaince_q';
     const schema = 'maintaince_schema';
-    const plans = createPlans(schema, queue);
-
+    const plans = createPlans(schema);
     const tboss = createTaskBoss(queue);
 
     const sqlPool = new Pool({
@@ -445,7 +444,7 @@ tap.test('task worker', async (t) => {
       await query(sqlPool, plans.createTasks([insertTask]));
 
       // mark the task as started
-      await query(sqlPool, plans.getAndStartTasks(100));
+      await query(sqlPool, plans.getAndStartTasks(queue, 100));
 
       await new Promise((resolve) => setTimeout(resolve, 1500));
       worker.notify();
@@ -486,7 +485,7 @@ tap.test('task worker', async (t) => {
       await query(sqlPool, plans.createTasks([insertTask]));
 
       // mark the task as started
-      await query(sqlPool, plans.getAndStartTasks(100));
+      await query(sqlPool, plans.getAndStartTasks(queue, 100));
 
       await new Promise((resolve) => setTimeout(resolve, 1200));
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -513,7 +512,7 @@ tap.test('task worker', async (t) => {
       await new Promise((resolve) => setTimeout(resolve, 1200));
 
       // mark the task as started
-      const res = await query(sqlPool, plans.getAndStartTasks(100));
+      const res = await query(sqlPool, plans.getAndStartTasks(queue, 100));
       t.equal(res.length, 1);
 
       await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -539,7 +538,7 @@ tap.test('task worker', async (t) => {
       worker.start();
       t.teardown(() => worker.stop());
 
-      const plans = createPlans(schema, queue);
+      const plans = createPlans(schema);
       const outgoingTask = tboss.getTask({
         task_name: 'purges-task-worker',
         config: {
@@ -557,7 +556,7 @@ tap.test('task worker', async (t) => {
 
       await query(sqlPool, plans.createTasks([insertTask]));
       // mark the task as started
-      const tasks = await query(sqlPool, plans.getAndStartTasks(100));
+      const tasks = await query(sqlPool, plans.getAndStartTasks(queue, 100));
 
       const runnignTasks = await sqlPool.query(
         `SELECT * FROM ${schema}.tasks WHERE  queue = '${queue}' AND meta_data->>'tn' = '${outgoingTask.task_name}'`
@@ -605,7 +604,7 @@ tap.test('task worker', async (t) => {
         cleanupInterval: 200,
       });
 
-      const plans = createPlans(schema, queue);
+      const plans = createPlans(schema);
 
       await query(
         sqlPool,

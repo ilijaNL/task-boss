@@ -225,7 +225,11 @@ export const createEventHandler = <TName extends string, T extends TSchema>(prop
   };
 };
 
-export type TaskClient<D = {}> = {
+export type TaskClient<T extends Record<string, TaskDefinition<any>>> = {
+  [K in keyof T]: T[K];
+};
+
+export type TaskBuilder<D extends Record<string, TaskDefinition<any>> = {}> = {
   defineTask<T extends TSchema, N extends string>(props: {
     name: N;
     schema: T;
@@ -233,8 +237,8 @@ export type TaskClient<D = {}> = {
      * Default task configuration. Can be (partially) override when creating the task
      */
     config?: Partial<TaskConfig>;
-  }): TaskClient<Simplify<D & { [n in N]: TaskDefinition<T> }>>;
-  defs: Readonly<D>;
+  }): TaskBuilder<Simplify<D & { [n in N]: TaskDefinition<T> }>>;
+  compile: () => TaskClient<D>;
 };
 
 /**
@@ -243,7 +247,7 @@ export type TaskClient<D = {}> = {
  *
  * A task client should be registered by a single service tbus.
  * @example
- * const client = createTaskClient('queueA')
+ * const client = createTaskBuilder('queueA')
  *   .defineTask({
  *     name: 'test',
  *     schema: Type.Object({ n: Type.Number({ minimum: 2 }) }),
@@ -258,7 +262,8 @@ export type TaskClient<D = {}> = {
  *       keepInSeconds: 8,
  *       retryDelay: 10,
  *     },
- *   });
+ *   })
+ *   .compile();
  *
  * tb.registerTaskClient(client, {
  *  async abc({ input }) {
@@ -269,7 +274,9 @@ export type TaskClient<D = {}> = {
  *   },
  * });
  */
-export const createTaskClient = <D>(queue: string): TaskClient<D> => {
+export const createTaskBuilder = <D extends Record<string, TaskDefinition<any>> = {}>(
+  queue: string
+): TaskBuilder<D> => {
   const definitions: D = {} as any;
 
   return {
@@ -288,10 +295,10 @@ export const createTaskClient = <D>(queue: string): TaskClient<D> => {
         queue: queue,
       });
 
-      return this as TaskClient<D & { [n in N]: TaskDefinition<T> }>;
+      return this as TaskBuilder<D & { [n in N]: TaskDefinition<T> }>;
     },
-    get defs() {
-      return Object.freeze(definitions);
+    compile() {
+      return Object.freeze(definitions) as TaskClient<D>;
     },
   };
 };
