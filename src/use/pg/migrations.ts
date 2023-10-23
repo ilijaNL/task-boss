@@ -84,8 +84,8 @@ export const createMigrationStore = (schema: string) => [
     -- used for expiring tasks
     CREATE INDEX ON ${schema}."tasks" ("state") WHERE state = 2;
 
-    -- singleton task
-    CREATE UNIQUE INDEX ON ${schema}."tasks" ("queue", "singleton_key") WHERE state < 3;
+    -- singleton task, which holds for scheduled, active, and retry state
+    CREATE UNIQUE INDEX ON ${schema}."tasks" ("queue", "singleton_key") WHERE state < ${TASK_STATES.expired};
 
     CREATE TABLE ${schema}.tasks_completed (
       -- coming from the task table

@@ -1,7 +1,8 @@
 import { TaskTrigger } from '../../definitions';
 import { OutgoingTask } from '../../task-boss';
-import { JsonObject, JsonValue } from '../../utils';
+import { JsonValue, JsonObject } from '../../utils';
 import { SchemaSQL, createSql } from './sql';
+import { directTask } from './with-pg';
 
 export type TaskName = string;
 
@@ -27,8 +28,8 @@ type SelectEvent = {
   position: string;
 };
 
-export function getStartAfter(task: SelectTask) {
-  return task.config.r_b ? task.config.r_d * Math.pow(2, task.retrycount) : task.config.r_d;
+export function getStartAfter(retryCount: number, taskConfig: TaskConfig) {
+  return taskConfig.r_b ? taskConfig.r_d * Math.pow(2, retryCount) : taskConfig.r_d;
 }
 
 export type InsertEvent = {
@@ -52,6 +53,28 @@ export type MetaData = {
   trace: TaskTrigger;
 } & JsonObject;
 
+export const defaultKeepInSeconds = 7 * 24 * 60 * 60;
+export const defaultEventRetentionInDays = 30;
+
+export type TaskConfig = {
+  /**
+   * Retry limit
+   */
+  r_l: number;
+  /**
+   * Retry delay in seconds
+   */
+  r_d: number;
+  /**
+   * Retry backoff
+   */
+  r_b: boolean;
+  /**
+   * Keep in seconds after complete
+   */
+  ki_s: number;
+};
+
 export type InsertTask = {
   /**
    * Queue
@@ -70,24 +93,7 @@ export type InsertTask = {
    */
   md: MetaData;
 
-  cf: {
-    /**
-     * Retry limit
-     */
-    r_l: number;
-    /**
-     * Retry delay in seconds
-     */
-    r_d: number;
-    /**
-     * Retry backoff
-     */
-    r_b: boolean;
-    /**
-     * Keep in seconds after complete
-     */
-    ki_s: number;
-  };
+  cf: TaskConfig;
   /**
    * Singleton key
    */
@@ -111,13 +117,17 @@ export type SelectTask = {
   state: TaskState;
   data: JsonValue;
   meta_data: MetaData;
-  config: InsertTask['cf'];
+  config: TaskConfig;
   expire_in_seconds: number;
 };
 
 export type SQLPlans = ReturnType<typeof createPlans>;
 
-export const createInsertTask = (task: OutgoingTask, trigger: TaskTrigger, keepInSeconds: number): InsertTask => ({
+export const createInsertTask = (
+  task: OutgoingTask,
+  trigger: TaskTrigger = directTask,
+  keepInSeconds = defaultKeepInSeconds
+): InsertTask => ({
   d: task.data,
   md: {
     tn: task.task_name,
@@ -233,15 +243,17 @@ export const createPlans = (schema: string) => {
       FROM {{schema}}.get_tasks(${queue}, ${amount}::integer)
     `,
     resolveTasks: (tasks: Array<ResolvedTask>) => sql`SELECT {{schema}}.resolve_tasks(${JSON.stringify(tasks)}::jsonb)`,
-    get_expired_tasks: (limit: number) => sql<SelectTask>`
+    get_expired_tasks: (limit: number) => sql<{
+      id: string;
+      retrycount: number;
+      state: TaskState;
+      config: TaskConfig;
+    }>`
       SELECT
         id,
         retryCount,
         state,
-        data,
-        meta_data,
-        config,
-        (EXTRACT(epoch FROM expireIn))::int as expire_in_seconds
+        config
       FROM {{schema}}.tasks
         WHERE state = ${TASK_STATES.active}
           AND (startedOn + expireIn) < now()

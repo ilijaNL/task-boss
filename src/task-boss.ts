@@ -9,8 +9,8 @@ import {
   TaskDefinition,
   TaskHandler,
   createEventHandler,
-  defaultTaskConfig,
   TaskClient,
+  defaultTaskConfig,
 } from './definitions';
 import { JsonValue, resolveWithinSeconds } from './utils';
 
@@ -106,22 +106,11 @@ export type TaskBoss = {
 
 export type TaskOverrideConfig = Partial<Omit<TaskConfig, 'singletonKey' | 'startAfterSeconds'>>;
 
-export type TaskBossConfiguration = {
-  /**
-   * Default configuration of eventHandlers/task handlers
-   */
-  taskOverrideConfig?: TaskOverrideConfig;
-};
-
 type TaskName = string & { __type?: string };
 
-export const createTaskFactory = (queue: string, taskOverrideConfig?: TaskOverrideConfig) => {
+export const createTaskFactory = (queue: string) => {
   return function toTask(task: Task): OutgoingTask {
-    const config: OutgoingTask['config'] = {
-      ...defaultTaskConfig,
-      ...taskOverrideConfig,
-      ...task.config,
-    };
+    const config: OutgoingTask['config'] = task.config;
     return {
       config,
       data: task.data,
@@ -131,11 +120,11 @@ export const createTaskFactory = (queue: string, taskOverrideConfig?: TaskOverri
   };
 };
 
-export const createTaskBoss = (queue: string, opts?: TaskBossConfiguration): TaskBoss => {
+export const createTaskBoss = (queue: string): TaskBoss => {
   const eventHandlers: Array<EventHandler<string, any>> = [];
   const taskHandlersMap = new Map<TaskName, TaskState & { handler: TaskHandler<any> }>();
 
-  const taskFactory = createTaskFactory(queue, opts?.taskOverrideConfig);
+  const taskFactory = createTaskFactory(queue);
 
   return {
     get queue() {
@@ -149,7 +138,6 @@ export const createTaskBoss = (queue: string, opts?: TaskBossConfiguration): Tas
       return handlers.map<OutgoingTask>((h) => {
         const config: OutgoingTask['config'] = {
           ...defaultTaskConfig,
-          ...opts?.taskOverrideConfig,
           ...(typeof h.config === 'function' ? h.config(event.event_data) : h.config),
         };
 
@@ -196,7 +184,7 @@ export const createTaskBoss = (queue: string, opts?: TaskBossConfiguration): Tas
       }
 
       taskHandlersMap.set(taskDef.task_name, {
-        config: props.overrideConfig ?? taskDef.config ?? opts?.taskOverrideConfig ?? defaultTaskConfig,
+        config: props.overrideConfig ?? taskDef.config ?? defaultTaskConfig,
         handler: props.handler,
         schema: taskDef.schema,
         task_name: taskDef.task_name,
@@ -214,7 +202,7 @@ export const createTaskBoss = (queue: string, opts?: TaskBossConfiguration): Tas
         schema: eventDef.schema,
         task_name: props.task_name,
         on_event: eventDef.event_name,
-        config: typeof props.config === 'function' ? {} : props.config ?? opts?.taskOverrideConfig ?? defaultTaskConfig,
+        config: typeof props.config === 'function' ? {} : props.config ?? defaultTaskConfig,
       });
 
       eventHandlers.push(

@@ -1,10 +1,18 @@
 import { Pool, PoolConfig } from 'pg';
-import { BaseClient, OutgoingTask, TaskBoss, TaskOverrideConfig, createTaskFactory } from '../../task-boss';
+import { BaseClient, OutgoingTask, TaskBoss, createTaskFactory } from '../../task-boss';
 import { TEvent, Task } from '../../definitions';
 import { QueryCommand, createSql, query, withTransaction } from './sql';
 import { migrate } from './migrations';
-import { InsertTask, createPlans, createInsertTask, ResolvedTask, createInsertPlans } from './plans';
-import { createMaintainceWorker } from './maintaince';
+import {
+  InsertTask,
+  createPlans,
+  createInsertTask,
+  ResolvedTask,
+  createInsertPlans,
+  defaultKeepInSeconds,
+  defaultEventRetentionInDays,
+} from './plans';
+import { createMaintainceWorker, maintanceQueue } from './maintaince';
 import { createBaseWorker } from '../../worker';
 import { createTaskWorker } from './task';
 import { DeferredPromise, JsonValue, debounce } from '../../utils';
@@ -28,11 +36,10 @@ export function createTaskToCommandFactory(
   schema: string,
   queue: string,
   opts: {
-    taskOverrideConfig?: TaskOverrideConfig;
     keepInSeconds?: number;
   }
 ) {
-  return _createTaskToCommandFactory(schema, createTaskFactory(queue, opts.taskOverrideConfig), {
+  return _createTaskToCommandFactory(schema, createTaskFactory(queue), {
     keepInSeconds: opts.keepInSeconds ?? defaultKeepInSeconds,
   });
 }
@@ -82,9 +89,6 @@ export const directTask = Object.freeze({
   type: 'direct',
 });
 
-export const defaultKeepInSeconds = 7 * 24 * 60 * 60;
-export const defaultEventRetentionInDays = 30;
-
 export const withPG = (
   taskBoss: TaskBoss,
   opts: {
@@ -112,6 +116,10 @@ export const withPG = (
     keepInSeconds?: number;
   }
 ): PGTaskBoss => {
+  if (taskBoss.queue === maintanceQueue) {
+    throw new Error('cannot use a reservate queue name: ' + taskBoss.queue);
+  }
+
   const { schema, db, worker, retention_in_days, keepInSeconds = defaultKeepInSeconds } = opts;
 
   const workerConfig = Object.assign<WorkerConfig, Partial<WorkerConfig>>(
@@ -303,10 +311,10 @@ export const withPG = (
 
       const lastCursor = (await query(pool, sqlPlans.getLastEvent()))[0];
       await query(pool, sqlPlans.ensureQueuePointer(taskBoss.queue, +(lastCursor?.position ?? 0)));
+      await maintainceWorker.start();
 
       tWorker.start();
       fanoutWorker.start();
-      maintainceWorker.start();
     },
     stop: async () => {
       if (state.started === false || state.stopped === true) {

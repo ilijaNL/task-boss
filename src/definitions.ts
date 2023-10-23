@@ -116,7 +116,7 @@ export interface Task<Data = JsonValue> {
   task_name: string;
   queue?: string;
   data: Data;
-  config: Partial<TaskConfig>;
+  config: TaskConfig;
 }
 
 // export type IncomingTask<Input> = { task_name: string; input: Input; trigger: TaskTrigger; expire_in_seconds: number };
@@ -176,7 +176,7 @@ export const defineTask = <T extends TSchema>(props: DefineTaskProps<T>): TaskDe
       queue: props.queue,
       task_name: props.task_name,
       data: input,
-      config: { ...props.config, ...config },
+      config: { ...defaultTaskConfig, ...props.config, ...config },
     };
   };
 
