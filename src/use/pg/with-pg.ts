@@ -117,7 +117,7 @@ export const withPG = (
   }
 ): PGTaskBoss => {
   if (taskBoss.queue === maintanceQueue) {
-    throw new Error('cannot use a reservate queue name: ' + taskBoss.queue);
+    throw new Error('cannot use a reserved queue name: ' + taskBoss.queue);
   }
 
   const { schema, db, worker, retention_in_days, keepInSeconds = defaultKeepInSeconds } = opts;
