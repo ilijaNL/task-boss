@@ -211,47 +211,38 @@ export const withPG = (
   const fanoutWorker = createBaseWorker(
     async () => {
       const fetchSize = 200;
-      const trxResult = await withTransaction<{ hasMore: boolean; hasChanged: boolean }>(pool, async (client) => {
-        const events = await query(client, sqlPlans.getCursorLockEvents(taskBoss.queue, fetchSize));
-        // nothing to do
-        if (events.length === 0) {
-          // update cursor to the latest point
-          return { hasChanged: false, hasMore: false };
-        }
+      const events = await query(pool, sqlPlans.getCursorLockEvents(taskBoss.queue, fetchSize, 30));
+      if (events.length === 0) {
+        await query(pool, sqlPlans.unlockCursor(taskBoss.queue));
+        return false;
+      }
 
-        const newCursor = +events[events.length - 1]!.position;
+      const newCursor = +events[events.length - 1]!.position;
 
-        const insertTasks = events.reduce((agg, event) => {
-          const tasks = taskBoss.toTasks(event);
+      const insertTasks = events.reduce((agg, event) => {
+        const tasks = taskBoss.toTasks(event);
 
-          agg.push(
-            ...tasks.map<InsertTask>((task) =>
-              createInsertTask(
-                task,
-                {
-                  type: 'event',
-                  e: {
-                    id: event.id,
-                    name: event.event_name,
-                  },
+        agg.push(
+          ...tasks.map<InsertTask>((task) =>
+            createInsertTask(
+              task,
+              {
+                type: 'event',
+                e: {
+                  id: event.id,
+                  name: event.event_name,
                 },
-                keepInSeconds
-              )
+              },
+              keepInSeconds
             )
-          );
+          )
+        );
 
-          return agg;
-        }, [] as Array<InsertTask>);
+        return agg;
+      }, [] as Array<InsertTask>);
 
-        await query(client, sqlPlans.createTasksAndSetCursor(taskBoss.queue, insertTasks, newCursor));
-
-        return {
-          hasChanged: insertTasks.length > 0,
-          hasMore: events.length === fetchSize,
-        };
-      });
-
-      return trxResult.hasMore;
+      await query(pool, sqlPlans.createTasksAndSetCursor(taskBoss.queue, insertTasks, newCursor));
+      return events.length === fetchSize;
     },
     {
       loopInterval: 1500,

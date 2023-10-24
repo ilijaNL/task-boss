@@ -134,7 +134,6 @@ t.test('with-pg', async (t) => {
     });
   });
 
-  // TODO: add postgres integration tests with retry & exponential backoff
   t.test('task retry', async (t) => {
     t.plan(2);
     const ee = new EventEmitter();
@@ -417,7 +416,6 @@ t.test('with-pg', async (t) => {
   t.test('emit event', async (t) => {
     const ee = new EventEmitter();
     const tb = createTaskBoss('emit_event_queue');
-    // const bus = createTBus('emit_event_queue', { db: sqlPool, schema: schema });
 
     const event = defineEvent({
       event_name: 'test_event',
@@ -521,7 +519,6 @@ t.test('with-pg', async (t) => {
   t.test('event handler singleton from payload', async ({ teardown, equal }) => {
     const queue = `singleton_queue_payload`;
     const schema = createRandomSchema();
-    // const bus = createTBus(queue, { db: sqlPool, schema: schema, worker: { intervalInMs: 200 } });
 
     const event = defineEvent({
       event_name: 'event_handler_singleton_payload',
@@ -556,8 +553,8 @@ t.test('with-pg', async (t) => {
     });
 
     const cursor = await sqlPool
-      .query(`SELECT * FROM ${schema}.cursors WHERE svc = '${queue}'`)
-      .then((r) => +r.rows[0].l_p);
+      .query(`SELECT * FROM ${schema}.cursors WHERE queue = '${queue}'`)
+      .then((r) => +r.rows[0].offset);
 
     await pgTb.publish(event.from({ c: 91 }), event.from({ c: 93 }), event.from({ c: 91 }));
     await pgTb.publish(event.from({ c: 91 }));
@@ -573,7 +570,7 @@ t.test('with-pg', async (t) => {
 
     // this means that all events are processed by the service
     equal(
-      await sqlPool.query(`SELECT * FROM ${schema}.cursors WHERE svc = '${queue}'`).then((r) => +r.rows[0].l_p),
+      await sqlPool.query(`SELECT * FROM ${schema}.cursors WHERE queue = '${queue}'`).then((r) => +r.rows[0].offset),
       cursor + 5
     );
   });
@@ -598,11 +595,11 @@ t.test('with-pg', async (t) => {
       await cleanupSchema(sqlPool, schema);
     });
 
-    const result = await sqlPool.query<{ l_p: string }>(
-      `SELECT l_p FROM ${schema}.cursors WHERE svc = 'serviceB' LIMIT 1`
+    const result = await sqlPool.query<{ offset: string }>(
+      `SELECT "offset" FROM ${schema}.cursors WHERE queue = 'serviceB' LIMIT 1`
     );
 
-    equal(result.rows[0]?.l_p, '2');
+    equal(result.rows[0]?.offset, '2');
   });
 
   t.test('cursor', async ({ teardown, equal }) => {

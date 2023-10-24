@@ -183,7 +183,7 @@ export const createPlans = (schema: string) => {
    */
   function ensureQueuePointer(queue: string, position: number) {
     return sql`
-      INSERT INTO {{schema}}.cursors (svc, l_p) 
+      INSERT INTO {{schema}}.cursors (queue, "offset")
       VALUES (${queue}, ${position}) 
       ON CONFLICT DO NOTHING`;
   }
@@ -193,31 +193,49 @@ export const createPlans = (schema: string) => {
     return sql`
       with _cu as (
         UPDATE {{schema}}.cursors 
-        SET l_p = ${last_position} 
-        WHERE svc = ${queue}
+        SET "offset" = ${last_position},
+            locked = false
+        WHERE queue = ${queue}
       ) SELECT {{schema}}.create_bus_tasks(${JSON.stringify(tasks)}::jsonb)
     `;
   }
 
+  function unlockCursor(queue: string) {
+    return sql`
+      UPDATE {{schema}}.cursors 
+      SET locked = false,
+          expire_lock_at = null
+      WHERE queue = ${queue}
+    `;
+  }
+
   // the pos > 0 is needed to have an index scan on events table
-  function getCursorLockEvents(queue: string, limit: number) {
+  function getCursorLockEvents(queue: string, limit: number, expireLockInSec: number) {
     const events = sql<SelectEvent>`
-      SELECT 
-        id, 
-        event_name, 
-        event_data,
-        pos as position
-      FROM {{schema}}.events
-      WHERE pos > 0 
-      AND pos > (
+      with _cursor as (
         SELECT 
-          l_p as cursor
+          id,
+          "offset"
         FROM {{schema}}.cursors 
-        WHERE svc = ${queue}
+        WHERE queue = ${queue} AND locked = false
         LIMIT 1
         FOR UPDATE
         SKIP LOCKED
+      ), lock as (
+        UPDATE {{schema}}.cursors
+        SET 
+          locked = true,
+          expire_lock_at = (now() + (${expireLockInSec} * interval '1s'))::timestamptz
+        FROM _cursor
+        WHERE cursors.id = _cursor.id
       )
+      SELECT 
+        events.id as id, 
+        event_name, 
+        event_data,
+        pos as position
+      FROM {{schema}}.events, _cursor
+      WHERE pos > 0 AND pos > _cursor.offset
       ORDER BY pos ASC
       LIMIT ${limit}`;
 
@@ -230,7 +248,13 @@ export const createPlans = (schema: string) => {
     getLastEvent,
     ensureQueuePointer: ensureQueuePointer,
     createTasksAndSetCursor,
+    unlockCursor,
     getCursorLockEvents,
+    expireCursorLocks: () => sql`
+      UPDATE {{schema}}.cursors
+      SET locked = false
+      WHERE locked = true AND expire_lock_at < now()
+    `,
     getAndStartTasks: (queue: string, amount: number) => sql<SelectTask>`
       SELECT
         id,

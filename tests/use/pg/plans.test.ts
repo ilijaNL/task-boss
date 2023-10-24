@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import tap from 'tap';
+import t from 'tap';
 import { createInsertTask, createPlans } from '../../../src/use/pg/plans';
 import { cleanupSchema, createRandomSchema } from './helpers';
 import { migrate } from '../../../src/use/pg/migrations';
@@ -7,7 +7,7 @@ import { query } from '../../../src/use/pg/sql';
 
 const connectionString = process.env.PG ?? 'postgres://postgres:postgres@localhost:5432/app';
 
-tap.test('postgres plans', async (tap) => {
+t.test('postgres plans', async (t) => {
   const schema = createRandomSchema();
 
   const sqlPool = new Pool({
@@ -22,15 +22,15 @@ tap.test('postgres plans', async (tap) => {
 
   await migrate(sqlPool, schema);
 
-  tap.teardown(async () => {
+  t.teardown(async () => {
     await cleanupSchema(sqlPool, schema);
     await sqlPool.end();
   });
 
-  tap.jobs = 1;
+  t.jobs = 1;
 
   // test for high concurrency
-  tap.test('pop concurrency', async (t) => {
+  t.test('pop concurrency', async (t) => {
     // should be a order of fetchsize
     const amountOfTasks = 200;
     const fetchSize = 10;
@@ -75,5 +75,27 @@ tap.test('postgres plans', async (tap) => {
     });
 
     t.equal(taskIds.size, amountOfTasks);
+  });
+
+  t.test('concurrency fetching events', async (t) => {
+    const queue = 'concurrent_events';
+    await query(sqlPool, plans.ensureQueuePointer(queue, 0));
+    await query(
+      sqlPool,
+      plans.createEvents([
+        { d: { exists: true }, e_n: 'event_retention_123' },
+        { d: { exists: true }, e_n: 'event_retention_123' },
+      ])
+    );
+
+    const events = await Promise.all(
+      new Array(10).fill(0).map(() => query(sqlPool, plans.getCursorLockEvents(queue, 100, 0)))
+    );
+
+    const b = await query(sqlPool, plans.getCursorLockEvents(queue, 100, 0));
+
+    events.push(b);
+
+    t.equal(events.flat().length, 2);
   });
 });

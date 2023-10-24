@@ -33,11 +33,19 @@ const expireTask = defineTask({
 export const createMaintainceWorker = (props: {
   schema: string;
   client: Pool;
+  /**
+   * Interval of the expire task (expiring event cursors and tasks).
+   * @default 30 seconds
+   */
   expireIntervalInSec?: number;
+  /**
+   * Interval of the clean up task.
+   * @default 300 seconds
+   */
   cleanUpIntervalInSec?: number;
 }) => {
   const sqlPlans = createPlans(props.schema);
-  const expireIntervalInSec = Math.max(props.expireIntervalInSec ?? 60, 1);
+  const expireIntervalInSec = Math.max(props.expireIntervalInSec ?? 30, 1);
   const cleanUpIntervalInSec = Math.max(props.cleanUpIntervalInSec ?? 60 * 5, 1);
 
   function scheduleExpireCmd(flag: boolean, startAfterSec: number) {
@@ -100,6 +108,7 @@ export const createMaintainceWorker = (props: {
       if (task.meta_data.tn === expireTask.task_name) {
         return withTransaction(props.client, async (client) => {
           const hasMore = await expireTasksTx(client);
+          await query(client, sqlPlans.expireCursorLocks());
           await query(client, scheduleExpireCmd(!(task.data as any).flag, hasMore ? 0 : expireIntervalInSec));
         });
       }
@@ -158,8 +167,10 @@ export const createMaintainceWorker = (props: {
   return {
     ...taskWorker,
     async start() {
-      await query(props.client, scheduleCleanCmd(true, 0));
-      await query(props.client, scheduleExpireCmd(true, 0));
+      await Promise.all([
+        query(props.client, scheduleCleanCmd(true, 0)),
+        query(props.client, scheduleExpireCmd(true, 0)),
+      ]);
 
       taskWorker.start();
     },

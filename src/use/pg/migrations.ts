@@ -20,12 +20,16 @@ export const createMigrationStore = (schema: string) => [
   `
     CREATE TABLE ${schema}."cursors" (
       "id" uuid NOT NULL DEFAULT gen_random_uuid(),
-      "svc" text not null,
-      "l_p" bigint not null default 0,
+      "queue" text not null,
+      "offset" bigint not null default 0,
+      "locked" boolean not null default false,
+      "expire_lock_at" timestamptz,
       "created_at" timestamptz NOT NULL DEFAULT now(), 
       PRIMARY KEY ("id"),
-      UNIQUE ("svc")
+      UNIQUE ("queue")
     );
+
+    CREATE INDEX ON ${schema}."cursors" (expire_lock_at) WHERE locked = true;
     
     CREATE TABLE ${schema}."events" (
       "id" BIGSERIAL PRIMARY KEY,

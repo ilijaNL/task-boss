@@ -277,4 +277,48 @@ t.test('maintaince worker', async (t) => {
     t.equal(r2.rows[0].days, 30);
     t.equal(r2.rows[1].days, 3);
   });
+
+  t.test('cursor lock release', async (t) => {
+    const queue = 'cursorlockqueue';
+    await query(sqlPool, plans.ensureQueuePointer(queue, 0));
+    await query(
+      sqlPool,
+      plans.createEvents([
+        { d: { exists: true }, e_n: 'event_retention_123' },
+        { d: { exists: true }, e_n: 'event_retention_123' },
+      ])
+    );
+
+    const cursor = await sqlPool
+      .query(`SELECT id, locked, queue, "offset" FROM ${schema}.cursors WHERE queue = '${queue}'`)
+      .then((r) => r.rows[0]);
+
+    const offsetBeforeFail = cursor.offset;
+    t.equal(cursor.locked, false);
+
+    // lock queue
+    await query(sqlPool, plans.getCursorLockEvents(queue, 100, 0));
+
+    {
+      const cursor = await sqlPool
+        .query(`SELECT id, locked, queue, "offset" FROM ${schema}.cursors WHERE queue = '${queue}'`)
+        .then((r) => r.rows[0]);
+
+      t.equal(cursor.locked, true);
+    }
+
+    // wait for maintaince task to kick in
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    mWorker.notify();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    {
+      const cursor = await sqlPool
+        .query(`SELECT id, locked, queue, "offset" FROM ${schema}.cursors WHERE queue = '${queue}'`)
+        .then((r) => r.rows[0]);
+
+      t.equal(cursor.offset, offsetBeforeFail);
+      t.equal(cursor.locked, false);
+    }
+  });
 });
