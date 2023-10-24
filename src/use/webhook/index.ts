@@ -1,10 +1,10 @@
-import { TEvent, Task, TaskTrigger } from '../../definitions';
+import { TEvent, Task, TaskTrace } from '../../definitions';
 import { BaseClient, OutgoingTask, TaskBoss } from '../../task-boss';
 import { DeferredPromise, JsonValue, mapCompletionDataArg } from '../../utils';
 import { Response } from '@whatwg-node/fetch';
 import { generateRandomSecretKey, getHMAC, webTimingSafeEqual } from './crypto';
 
-export type TaskDTO<T> = { tn: string; data: T; trace: TaskTrigger };
+export type TaskDTO<T> = { tn: string; data: T; trace?: TaskTrace };
 
 /**
  * Event that is send to the webhook service
@@ -59,11 +59,11 @@ export type RemoteTask<T = JsonValue> = {
   skey: string | null;
 };
 
-export const createRemoteTask = (task: OutgoingTask, trigger: TaskTrigger): RemoteTask => ({
+export const createRemoteTask = (task: OutgoingTask): RemoteTask => ({
   d: {
     data: task.data,
     tn: task.task_name,
-    trace: trigger,
+    trace: task.trace,
   },
   q: task.queue,
   eis: task.config.expireInSeconds,
@@ -89,17 +89,18 @@ const withWebhook = (taskBoss: TaskBoss, remote: WebhookService) => {
       return remote.submitEvents(events.map((e) => ({ d: e.data, e: e.event_name })));
     },
     async send(...tasks: Task[]) {
-      const outgoing = tasks.map((t) => taskBoss.getTask(t));
-      return remote.submitTasks(outgoing.map((t) => createRemoteTask(t, { type: 'direct' })));
+      const outgoing = tasks.map((t) => taskBoss.toOutTask(t));
+      return remote.submitTasks(outgoing.map((t) => createRemoteTask(t)));
     },
-    async onEvent(event: IncomingRemoteEvent) {
-      const tasks = taskBoss.toTasks({ event_data: event.d, event_name: event.n, id: event.id });
+    onEvents(events: IncomingRemoteEvent[]) {
+      const inEvents = events.map((event) => ({ event_data: event.d, event_name: event.n, id: event.id }));
+      const tasks = taskBoss.eventsToTasks(inEvents);
 
       if (tasks.length === 0) {
         return;
       }
 
-      const remoteTasks = tasks.map((t) => createRemoteTask(t, { type: 'event', e: { id: event.id, name: event.n } }));
+      const remoteTasks = tasks.map(createRemoteTask);
 
       return remote.submitTasks(remoteTasks);
     },
@@ -107,12 +108,12 @@ const withWebhook = (taskBoss: TaskBoss, remote: WebhookService) => {
       const future = new DeferredPromise();
 
       taskBoss
-        .handle(task.d, {
+        .handleTask(task.d, {
           expire_in_seconds: task.es,
           id: task.id,
           retried: task.r,
           task_name: task.tn,
-          trigger: task.tr,
+          trace: task.tr,
           fail(data) {
             future.reject(data);
           },
@@ -167,9 +168,9 @@ export type IncomingRemoteTask = {
    */
   tn: string;
   /**
-   * Task trigger
+   * Task trace
    */
-  tr: TaskTrigger;
+  tr?: TaskTrace;
 };
 
 export const withHandler = (
@@ -225,7 +226,7 @@ export const withHandler = (
 
         res = await client.onTask(parsed.b);
       } else if (parsed.e === true) {
-        await client.onEvent(parsed.b);
+        await client.onEvents(parsed.b);
       } else {
         throw new Error('unknown body');
       }

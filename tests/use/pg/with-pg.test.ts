@@ -99,10 +99,9 @@ t.test('with-pg', async (t) => {
     let handled = 0;
 
     tb.registerTask(taskDef, {
-      handler: async (input, { trigger }) => {
+      handler: async (input) => {
         handled += 1;
         equal(input.works, 'abcd');
-        equal(trigger.type, 'direct');
         if (handled > 1) {
           ee.emit('handled');
         }
@@ -293,10 +292,9 @@ t.test('with-pg', async (t) => {
     let handled = 0;
 
     tb.registerTask(taskDef, {
-      handler: async (input, { trigger, resolve }) => {
+      handler: async (input, { resolve }) => {
         handled += 1;
         equal(input.works, 'abcd');
-        equal(trigger.type, 'direct');
         if (handled > 1) {
           ee.emit('handled');
         }
@@ -433,27 +431,27 @@ t.test('with-pg', async (t) => {
 
     tb.on(event, {
       task_name: 'task1',
-      handler: async (input, { trigger }) => {
+      handler: async (input, { trace }) => {
         t.equal(input.text, 'text222');
-        t.equal(trigger.type, 'event');
+        t.equal(trace?.type, 'event');
         ee.emit('handled1');
       },
     });
 
     tb.on(event, {
       task_name: 'task_2',
-      handler: async (input, { trigger }) => {
+      handler: async (input, { trace }) => {
         t.equal(input.text, 'text222');
-        t.equal(trigger.type, 'event');
+        t.equal(trace?.type, 'event');
         ee.emit('handled2');
       },
     });
 
     tb.on(event2, {
       task_name: 'task_3',
-      handler: async (input, { trigger }) => {
+      handler: async (input, { trace }) => {
         t.equal(input.rrr, 'event2');
-        t.equal(trigger.type, 'event');
+        t.equal(trace?.type, 'event');
         ee.emit('handled3');
       },
     });

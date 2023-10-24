@@ -29,7 +29,6 @@ tap.test('task worker', async (t) => {
           startAfterSeconds: 0,
         },
       },
-      { type: 'direct' },
       120
     );
 
@@ -88,7 +87,6 @@ tap.test('task worker', async (t) => {
           startAfterSeconds: 0,
         },
       },
-      { type: 'direct' },
       120
     );
 
@@ -147,7 +145,6 @@ tap.test('task worker', async (t) => {
         id: '0',
         meta_data: {
           tn: 't',
-          trace: { type: 'direct' },
         },
         config: {
           ki_s: 21,
@@ -218,7 +215,6 @@ tap.test('task worker', async (t) => {
           startAfterSeconds: 0,
         },
       },
-      { type: 'direct' },
       120
     );
 
@@ -281,7 +277,6 @@ tap.test('task worker', async (t) => {
           startAfterSeconds: 0,
         },
       },
-      { type: 'direct' },
       10
     );
 
@@ -343,7 +338,6 @@ tap.test('task worker', async (t) => {
           startAfterSeconds: 0,
         },
       },
-      { type: 'direct' },
       10
     );
 

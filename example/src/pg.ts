@@ -42,8 +42,8 @@ async function main() {
   // emit task using taskclient
   intervals.push(
     setInterval(() => {
-      boss.send(taskClient.defs.t1.from({ a: 'aa' }));
-      boss.send(taskClient.defs.t2.from({ b: 'bb' }));
+      boss.send(taskClient.t1.from({ a: 'aa' }));
+      boss.send(taskClient.t2.from({ b: 'bb' }));
     }, 50)
   );
 

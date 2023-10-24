@@ -1,8 +1,7 @@
-import { TaskTrigger } from '../../definitions';
+import { TaskTrace } from '../../definitions';
 import { OutgoingTask } from '../../task-boss';
 import { JsonValue, JsonObject } from '../../utils';
 import { SchemaSQL, createSql } from './sql';
-import { directTask } from './with-pg';
 
 export type TaskName = string;
 
@@ -50,8 +49,8 @@ export type InsertEvent = {
 
 export type MetaData = {
   tn: string;
-  trace: TaskTrigger;
-} & JsonObject;
+  trace?: TaskTrace;
+};
 
 export const defaultKeepInSeconds = 7 * 24 * 60 * 60;
 export const defaultEventRetentionInDays = 30;
@@ -123,15 +122,11 @@ export type SelectTask = {
 
 export type SQLPlans = ReturnType<typeof createPlans>;
 
-export const createInsertTask = (
-  task: OutgoingTask,
-  trigger: TaskTrigger = directTask,
-  keepInSeconds = defaultKeepInSeconds
-): InsertTask => ({
+export const createInsertTask = (task: OutgoingTask, keepInSeconds = defaultKeepInSeconds): InsertTask => ({
   d: task.data,
   md: {
     tn: task.task_name,
-    trace: trigger,
+    trace: task.trace,
   },
   q: task.queue,
   eis: task.config.expireInSeconds,

@@ -81,7 +81,7 @@ t.test('maintaince worker', async (t) => {
   });
 
   t.test('expires', async (t) => {
-    const outgoingTask = tboss.getTask({
+    const outgoingTask = tboss.toOutTask({
       task_name: 'expired-task-123',
       config: {
         ...defaultTaskConfig,
@@ -93,7 +93,7 @@ t.test('maintaince worker', async (t) => {
       data: {},
     });
 
-    const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 120);
+    const insertTask = createInsertTask(outgoingTask, 120);
 
     await query(sqlPool, plans.createTasks([insertTask]));
 
@@ -120,7 +120,7 @@ t.test('maintaince worker', async (t) => {
   });
 
   t.test('expires with retry', async (t) => {
-    const outgoingTask = tboss.getTask({
+    const outgoingTask = tboss.toOutTask({
       task_name: 'expired-task-123-retry',
       config: {
         ...defaultTaskConfig,
@@ -132,7 +132,7 @@ t.test('maintaince worker', async (t) => {
       data: {},
     });
 
-    const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 120);
+    const insertTask = createInsertTask(outgoingTask, 120);
 
     await query(sqlPool, plans.createTasks([insertTask]));
 
@@ -197,7 +197,7 @@ t.test('maintaince worker', async (t) => {
   });
 
   t.test('purges tasks', async (t) => {
-    const outgoingTask = tboss.getTask({
+    const outgoingTask = tboss.toOutTask({
       task_name: 'purges-task-worker',
       config: {
         ...defaultTaskConfig,
@@ -208,7 +208,7 @@ t.test('maintaince worker', async (t) => {
       data: {},
     });
 
-    const insertTask = createInsertTask(outgoingTask, { type: 'direct' }, 0);
+    const insertTask = createInsertTask(outgoingTask, 0);
 
     t.equal(insertTask.cf.ki_s, 0);
     t.equal(insertTask.saf, 0);

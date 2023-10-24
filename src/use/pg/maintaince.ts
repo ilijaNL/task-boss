@@ -4,7 +4,6 @@ import { query, withTransaction } from './sql';
 import { createTaskWorker } from './task';
 import { defineTask } from '../../definitions';
 import { Type } from '@sinclair/typebox';
-import { directTask } from './with-pg';
 
 export const maintanceQueue = '__maintaince__';
 
@@ -61,7 +60,6 @@ export const createMaintainceWorker = (props: {
         ),
         queue: maintanceQueue,
       },
-      directTask,
       60 * 60 * 24
     );
 
@@ -83,7 +81,6 @@ export const createMaintainceWorker = (props: {
         ),
         queue: maintanceQueue,
       },
-      directTask,
       60 * 60 * 24 * 3
     );
 

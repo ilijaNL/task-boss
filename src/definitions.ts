@@ -7,29 +7,24 @@ export interface TEvent<Name = string, Data = JsonValue> {
   data: Data;
 }
 
-export type TaskTrigger =
-  | {
-      /**
-       * Directly scheduled task
-       */
-      type: 'direct';
-    }
-  | {
-      type: 'event';
-      /**
-       * Triggered by event
-       */
-      e: {
-        /**
-         * Event id
-         */
-        id: string;
-        /**
-         * Event name
-         */
-        name: string;
-      };
-    };
+interface BaseTaskTrace {
+  type: string;
+  t_id: string;
+}
+
+// interface DirectTrace extends BaseTaskTrace {
+//   type: 'direct';
+// }
+
+interface EventTrace extends BaseTaskTrace {
+  type: 'event';
+  /**
+   * Triggered by event
+   */
+  event_name: string;
+}
+
+export type TaskTrace = EventTrace;
 
 export interface EventSpec<Name extends string, Schema extends TSchema> {
   /**
@@ -124,7 +119,7 @@ export type TaskHandlerCtx<Res> = {
   id: string;
   expire_in_seconds: number;
   task_name: string;
-  trigger: TaskTrigger;
+  trace?: TaskTrace | undefined;
   retried: number;
   fail: (reason?: any) => void;
   resolve: (data: Res) => void;

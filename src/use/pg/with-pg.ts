@@ -1,7 +1,7 @@
 import { Pool, PoolConfig } from 'pg';
-import { BaseClient, OutgoingTask, TaskBoss, createTaskFactory } from '../../task-boss';
-import { TEvent, Task } from '../../definitions';
-import { QueryCommand, createSql, query, withTransaction } from './sql';
+import { BaseClient, IncomingEvent, OutgoingTask, TaskBoss, createTaskFactory } from '../../task-boss';
+import { TEvent, Task, TaskHandler } from '../../definitions';
+import { QueryCommand, createSql, query } from './sql';
 import { migrate } from './migrations';
 import {
   InsertTask,
@@ -18,6 +18,21 @@ import { createTaskWorker } from './task';
 import { DeferredPromise, JsonValue, debounce } from '../../utils';
 import { createBatcher } from 'node-batcher';
 
+export interface Service {
+  /**
+   * Queue that is used for this taskboss instance
+   */
+  queue: Readonly<string>;
+  /**
+   * Execute the handler for an incoming task
+   */
+  handleTask: TaskHandler<unknown>;
+  /**
+   * Map incoming events to outgoing events to produce fanout strategy
+   */
+  mapEvents: (events: IncomingEvent[]) => OutgoingTask[] | Promise<OutgoingTask[]>;
+}
+
 function _createTaskToCommandFactory(
   schema: string,
   taskFactory: (task: Task<JsonValue>) => OutgoingTask,
@@ -27,8 +42,12 @@ function _createTaskToCommandFactory(
 ) {
   const plans = createInsertPlans(createSql(schema));
 
+  function taskMapper(task: Task) {
+    return createInsertTask(taskFactory(task), opts.keepInSeconds);
+  }
+
   return function toCommands(...task: Task[]): QueryCommand<{}> {
-    return plans.createTasks(task.map((t) => createInsertTask(taskFactory(t), directTask, opts.keepInSeconds)));
+    return plans.createTasks(task.map(taskMapper));
   };
 }
 
@@ -85,39 +104,51 @@ export interface PGTaskBoss extends BaseClient {
   getSendCommand: (...tasks: Task[]) => QueryCommand<unknown>;
 }
 
-export const directTask = Object.freeze({
-  type: 'direct',
-});
+export interface PgOptions {
+  /**
+   * Postgres database pool or existing pool
+   */
+  db: Pool | PoolConfig;
+  /**
+   * Task worker configuration
+   */
+  worker?: Partial<WorkerConfig>;
+  /**
+   * Amount of that getting fetched at a time to fanout.
+   * @default 200
+   */
+  eventsFetchSize?: number;
+  /**
+   * Postgres database schema to use.
+   * Note: changing schemas will result in event/task loss
+   */
+  schema: string;
+  /**
+   * Event retention in days.
+   * Default 30;
+   */
+  retention_in_days?: number;
+  /**
+   * How long task is hold in the tasks table before it is removed. Default 7 * 24 * 60 * 60 (7 days)
+   */
+  keepInSeconds?: number;
+}
 
-export const withPG = (
-  taskBoss: TaskBoss,
-  opts: {
-    /**
-     * Postgres database pool or existing pool
-     */
-    db: Pool | PoolConfig;
-    /**
-     * Task worker configuration
-     */
-    worker?: Partial<WorkerConfig>;
-    /**
-     * Postgres database schema to use.
-     * Note: changing schemas will result in event/task loss
-     */
-    schema: string;
-    /**
-     * Event retention in days.
-     * Default 30;
-     */
-    retention_in_days?: number;
-    /**
-     * How long task is hold in the tasks table before it is archieved. Default 7 * 24 * 60 * 60 (7 days)
-     */
-    keepInSeconds?: number;
-  }
-): PGTaskBoss => {
-  if (taskBoss.queue === maintanceQueue) {
-    throw new Error('cannot use a reserved queue name: ' + taskBoss.queue);
+export type TaskService = {
+  getPublishCommand: (...events: TEvent<string>[]) => QueryCommand<{}>;
+  getSendCommand: (...task: Task[]) => QueryCommand<{}>;
+  notifyFanout(): void;
+  notifyTaskWorker(): void;
+  readonly pool: Pool;
+  start(): Promise<void>;
+  stop(): Promise<void>;
+};
+
+export const createPGTaskService = (service: Service, opts: PgOptions): TaskService => {
+  const mQueue = service.queue;
+
+  if (mQueue === maintanceQueue) {
+    throw new Error('cannot use a reserved queue name: ' + mQueue);
   }
 
   const { schema, db, worker, retention_in_days, keepInSeconds = defaultKeepInSeconds } = opts;
@@ -172,7 +203,7 @@ export const withPG = (
     poolInternvalInMs: workerConfig.intervalInMs,
     refillThresholdPct: workerConfig.refillFactor,
     async popTasks(amount) {
-      return query(pool, sqlPlans.getAndStartTasks(taskBoss.queue, amount));
+      return query(pool, sqlPlans.getAndStartTasks(mQueue, amount));
     },
     async resolveTask(task) {
       await resolveTaskBatcher.add(task);
@@ -180,14 +211,14 @@ export const withPG = (
     async handler({ data, meta_data, expire_in_seconds, retrycount, id }): Promise<any> {
       const future: DeferredPromise = new DeferredPromise();
 
-      taskBoss
+      service
         // todo convert TaskHandlerCtx to class
-        .handle(data, {
+        .handleTask(data, {
           expire_in_seconds: expire_in_seconds,
           id: id,
           retried: retrycount,
           task_name: meta_data.tn,
-          trigger: meta_data.trace,
+          trace: meta_data.trace,
           fail(data) {
             future.reject(data);
           },
@@ -210,38 +241,20 @@ export const withPG = (
   // Worker which is responsible for processing incoming events and creating tasks
   const fanoutWorker = createBaseWorker(
     async () => {
-      const fetchSize = 200;
-      const events = await query(pool, sqlPlans.getCursorLockEvents(taskBoss.queue, fetchSize, 30));
+      const fetchSize = opts.eventsFetchSize ?? 200;
+      const events = await query(pool, sqlPlans.getCursorLockEvents(mQueue, fetchSize, 30));
       if (events.length === 0) {
-        await query(pool, sqlPlans.unlockCursor(taskBoss.queue));
+        await query(pool, sqlPlans.unlockCursor(mQueue));
         return false;
       }
 
       const newCursor = +events[events.length - 1]!.position;
 
-      const insertTasks = events.reduce((agg, event) => {
-        const tasks = taskBoss.toTasks(event);
+      const outTasks = await service.mapEvents(events);
 
-        agg.push(
-          ...tasks.map<InsertTask>((task) =>
-            createInsertTask(
-              task,
-              {
-                type: 'event',
-                e: {
-                  id: event.id,
-                  name: event.event_name,
-                },
-              },
-              keepInSeconds
-            )
-          )
-        );
+      const insertTasks = outTasks.map<InsertTask>((task) => createInsertTask(task, keepInSeconds));
 
-        return agg;
-      }, [] as Array<InsertTask>);
-
-      await query(pool, sqlPlans.createTasksAndSetCursor(taskBoss.queue, insertTasks, newCursor));
+      await query(pool, sqlPlans.createTasksAndSetCursor(mQueue, insertTasks, newCursor));
       return events.length === fetchSize;
     },
     {
@@ -251,46 +264,27 @@ export const withPG = (
 
   const maintainceWorker = createMaintainceWorker({ client: pool, schema: schema });
 
-  const notifyFanout = debounce(() => fanoutWorker.notify(), { ms: 75, maxMs: 300 });
-  const notifyWorker = debounce(() => tWorker.notify(), { ms: 75, maxMs: 150 });
-
   const eventsToCommandFactory = createEventToCommandFactory(schema, {
     retentionInDays: retention_in_days ?? defaultEventRetentionInDays,
   });
 
-  const taskToCommandFactory = _createTaskToCommandFactory(schema, taskBoss.getTask, {
+  const taskToCommandFactory = _createTaskToCommandFactory(schema, createTaskFactory(mQueue), {
     keepInSeconds: defaultKeepInSeconds,
   });
 
-  function shouldNotifyTaskWorker(t: Task<JsonValue>) {
-    return (t.queue === taskBoss.queue || !t.queue) && !t.config.startAfterSeconds;
-  }
-
   return {
-    getState: taskBoss.getState,
     getPublishCommand: eventsToCommandFactory,
     getSendCommand: taskToCommandFactory,
-    async send(...tasks) {
-      await query(pool, taskToCommandFactory(...tasks));
-
-      // check if instance is affected by the new tasks
-      // if queue is not specified, it means we will create task for this instance
-      const hasEffectToCurrentWorker = tasks.some(shouldNotifyTaskWorker);
-
-      if (hasEffectToCurrentWorker) {
-        notifyWorker();
-      }
+    notifyFanout() {
+      return fanoutWorker.notify();
     },
-    async publish(...events) {
-      await query(pool, eventsToCommandFactory(...events));
-      const taskBossEvents = taskBoss.getState().events;
-      // check if instance is affected by the published events
-      const hasEffectToCurrentWorker = events.some((e) => taskBossEvents.some((ee) => ee.event_name === e.event_name));
-      if (hasEffectToCurrentWorker) {
-        notifyFanout();
-      }
+    notifyTaskWorker() {
+      return tWorker.notify();
     },
-    async start() {
+    get pool(): Pool {
+      return pool;
+    },
+    async start(): Promise<void> {
       if (state.started) {
         return;
       }
@@ -301,13 +295,13 @@ export const withPG = (
       await migrate(pool, schema);
 
       const lastCursor = (await query(pool, sqlPlans.getLastEvent()))[0];
-      await query(pool, sqlPlans.ensureQueuePointer(taskBoss.queue, +(lastCursor?.position ?? 0)));
+      await query(pool, sqlPlans.ensureQueuePointer(mQueue, +(lastCursor?.position ?? 0)));
       await maintainceWorker.start();
 
       tWorker.start();
       fanoutWorker.start();
     },
-    stop: async () => {
+    async stop(): Promise<void> {
       if (state.started === false || state.stopped === true) {
         return;
       }
@@ -324,6 +318,51 @@ export const withPG = (
       await cleanupDB();
       // only allow to start when fully stopped
       state.started = false;
+    },
+  };
+};
+
+export const withPG = (taskBoss: TaskBoss, opts: PgOptions): PGTaskBoss => {
+  const taskService = createPGTaskService(
+    {
+      mapEvents(events) {
+        return taskBoss.eventsToTasks(events);
+      },
+      handleTask: taskBoss.handleTask,
+      queue: taskBoss.queue,
+    },
+    opts
+  );
+
+  const notifyFanout = debounce(() => taskService.notifyFanout(), { ms: 75, maxMs: 300 });
+  const notifyWorker = debounce(() => taskService.notifyTaskWorker(), { ms: 75, maxMs: 150 });
+
+  function shouldNotifyTaskWorker(t: Task<JsonValue>) {
+    return (t.queue === taskBoss.queue || !t.queue) && !t.config.startAfterSeconds;
+  }
+
+  return {
+    start: taskService.start,
+    stop: taskService.stop,
+    getSendCommand: taskService.getSendCommand,
+    getPublishCommand: taskService.getPublishCommand,
+    async send(...tasks) {
+      await query(taskService.pool, taskService.getSendCommand(...tasks));
+
+      // check if instance is affected by the new tasks
+      // if queue is not specified, it means we will create task for this instance
+      const hasEffectToCurrentWorker = tasks.some(shouldNotifyTaskWorker);
+
+      if (hasEffectToCurrentWorker) {
+        notifyWorker();
+      }
+    },
+    async publish(...events) {
+      await query(taskService.pool, taskService.getPublishCommand(...events));
+      const hasEffectToCurrentWorker = events.some((e) => taskBoss.hasRegisteredEvent(e.event_name));
+      if (hasEffectToCurrentWorker) {
+        notifyFanout();
+      }
     },
   };
 };

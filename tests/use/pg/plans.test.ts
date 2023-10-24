@@ -53,7 +53,6 @@ t.test('postgres plans', async (t) => {
                 startAfterSeconds: 0,
               },
             },
-            { type: 'direct' },
             120
           )
         )

@@ -14,10 +14,8 @@ Array [
       },
       "tn": "task1",
       "trace": Object {
-        "e": Object {
-          "id": "123",
-          "name": "test_event",
-        },
+        "event_name": "test_event",
+        "t_id": "123",
         "type": "event",
       },
     },
@@ -36,10 +34,8 @@ Array [
       },
       "tn": "task_2",
       "trace": Object {
-        "e": Object {
-          "id": "123",
-          "name": "test_event",
-        },
+        "event_name": "test_event",
+        "t_id": "123",
         "type": "event",
       },
     },
@@ -58,10 +54,8 @@ Array [
       },
       "tn": "task_3",
       "trace": Object {
-        "e": Object {
-          "id": "5a4wdawdawd",
-          "name": "awdawd",
-        },
+        "event_name": "awdawd",
+        "t_id": "5a4wdawdawd",
         "type": "event",
       },
     },
