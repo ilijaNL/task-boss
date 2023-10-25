@@ -18,7 +18,7 @@ import { createTaskWorker } from './task';
 import { DeferredPromise, JsonValue, debounce } from '../../utils';
 import { createBatcher } from 'node-batcher';
 
-export interface Service {
+export interface TaskService {
   /**
    * Queue that is used for this taskboss instance
    */
@@ -134,17 +134,16 @@ export interface PgOptions {
   keepInSeconds?: number;
 }
 
-export type TaskService = {
+export interface PGTaskService extends BaseClient {
   getPublishCommand: (...events: TEvent<string>[]) => QueryCommand<{}>;
   getSendCommand: (...task: Task[]) => QueryCommand<{}>;
   notifyFanout(): void;
   notifyTaskWorker(): void;
-  readonly pool: Pool;
   start(): Promise<void>;
   stop(): Promise<void>;
-};
+}
 
-export const createPGTaskService = (service: Service, opts: PgOptions): TaskService => {
+export const createPGTaskService = (service: TaskService, opts: PgOptions): PGTaskService => {
   const mQueue = service.queue;
 
   if (mQueue === maintanceQueue) {
@@ -278,11 +277,14 @@ export const createPGTaskService = (service: Service, opts: PgOptions): TaskServ
     notifyFanout() {
       return fanoutWorker.notify();
     },
+    async publish(...events) {
+      await query(pool, eventsToCommandFactory(...events));
+    },
+    async send(...tasks) {
+      await query(pool, taskToCommandFactory(...tasks));
+    },
     notifyTaskWorker() {
       return tWorker.notify();
-    },
-    get pool(): Pool {
-      return pool;
     },
     async start(): Promise<void> {
       if (state.started) {
@@ -347,7 +349,7 @@ export const withPG = (taskBoss: TaskBoss, opts: PgOptions): PGTaskBoss => {
     getSendCommand: taskService.getSendCommand,
     getPublishCommand: taskService.getPublishCommand,
     async send(...tasks) {
-      await query(taskService.pool, taskService.getSendCommand(...tasks));
+      await taskService.send(...tasks);
 
       // check if instance is affected by the new tasks
       // if queue is not specified, it means we will create task for this instance
@@ -358,9 +360,9 @@ export const withPG = (taskBoss: TaskBoss, opts: PgOptions): PGTaskBoss => {
       }
     },
     async publish(...events) {
-      await query(taskService.pool, taskService.getPublishCommand(...events));
-      const hasEffectToCurrentWorker = events.some((e) => taskBoss.hasRegisteredEvent(e.event_name));
-      if (hasEffectToCurrentWorker) {
+      await taskService.publish(...events);
+
+      if (events.some((e) => taskBoss.hasRegisteredEvent(e.event_name))) {
         notifyFanout();
       }
     },

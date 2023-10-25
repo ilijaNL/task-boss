@@ -1,6 +1,6 @@
 import { TaskTrace } from '../../definitions';
 import { OutgoingTask } from '../../task-boss';
-import { JsonValue, JsonObject } from '../../utils';
+import { JsonValue } from '../../utils';
 import { SchemaSQL, createSql } from './sql';
 
 export type TaskName = string;
