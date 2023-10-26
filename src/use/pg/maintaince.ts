@@ -34,7 +34,7 @@ export const createMaintainceWorker = (props: {
   client: Pool;
   /**
    * Interval of the expire task (expiring event cursors and tasks).
-   * @default 30 seconds
+   * @default 15 seconds
    */
   expireIntervalInSec?: number;
   /**
@@ -44,7 +44,7 @@ export const createMaintainceWorker = (props: {
   cleanUpIntervalInSec?: number;
 }) => {
   const sqlPlans = createPlans(props.schema);
-  const expireIntervalInSec = Math.max(props.expireIntervalInSec ?? 30, 1);
+  const expireIntervalInSec = Math.max(props.expireIntervalInSec ?? 15, 1);
   const cleanUpIntervalInSec = Math.max(props.cleanUpIntervalInSec ?? 60 * 5, 1);
 
   function scheduleExpireCmd(flag: boolean, startAfterSec: number) {

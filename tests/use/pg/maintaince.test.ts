@@ -15,7 +15,6 @@ t.jobs = 2;
 
 t.test('recreates maintaince tasks', async (t) => {
   const schema = createRandomSchema();
-  const plans = createPlans(schema);
 
   const sqlPool = new Pool({
     connectionString: connectionString,
