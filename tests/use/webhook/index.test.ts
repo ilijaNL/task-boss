@@ -250,58 +250,6 @@ tap.test('on new task', async (tap) => {
   tap.same(await res.json(), handlerResponse);
 });
 
-tap.test('on new task resolve', async (tap) => {
-  const queue = 'task_queue';
-  const tb = createTaskBoss(queue);
-
-  const task_name = 'emit_task';
-
-  const taskDef = defineTask({
-    task_name: task_name,
-    schema: Type.Object({ works: Type.String() }),
-  });
-
-  const task = taskDef.from({ works: '12312312' });
-
-  tb.registerTask(taskDef, {
-    handler: async (r, { resolve }) => {
-      tap.equal(r.works, '12312312');
-
-      resolve({ resolves: true });
-
-      return {
-        success: 'balba',
-      };
-    },
-  });
-
-  const handlerBoss = withHandler(tb, {
-    sign_secret: null,
-    service: {
-      async submitTasks(tasks) {
-        tap.fail('should not call');
-        //
-      },
-      async submitEvents(events) {
-        tap.fail('should not call');
-        //
-      },
-    },
-  });
-
-  const taskReq = createTaskRequest({
-    es: 10,
-    d: task.data,
-    id: '123',
-    r: 0,
-    tn: task.task_name,
-  });
-
-  const res = await handlerBoss.handle(taskReq);
-
-  tap.same(await res.json(), { resolves: true });
-});
-
 tap.test('on new task throws', async (tap) => {
   const queue = 'task_queue';
   const tb = createTaskBoss(queue);

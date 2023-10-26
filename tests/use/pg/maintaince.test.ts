@@ -2,7 +2,8 @@ import { Pool } from 'pg';
 import t from 'tap';
 import { TASK_STATES, createInsertTask, createPlans } from '../../../src/use/pg/plans';
 import { createMaintainceWorker, maintanceQueue } from '../../../src/use/pg/maintaince';
-import { migrate } from '../../../src/use/pg/migrations';
+import { createMigrationStore } from '../../../src/use/pg/migrations';
+import { migrate } from '../../../src/use/pg/migrate';
 import { cleanupSchema, createRandomSchema } from './helpers';
 import { query } from '../../../src/use/pg/sql';
 import { defaultTaskConfig } from '../../../src/definitions';
@@ -20,7 +21,7 @@ t.test('recreates maintaince tasks', async (t) => {
     connectionString: connectionString,
   });
 
-  await migrate(sqlPool, schema);
+  await migrate(sqlPool, schema, createMigrationStore(schema));
 
   const mWorker = createMaintainceWorker({
     client: sqlPool,
@@ -63,7 +64,7 @@ t.test('maintaince worker', async (t) => {
     connectionString: connectionString,
   });
 
-  await migrate(sqlPool, schema);
+  await migrate(sqlPool, schema, createMigrationStore(schema));
 
   const mWorker = createMaintainceWorker({
     client: sqlPool,

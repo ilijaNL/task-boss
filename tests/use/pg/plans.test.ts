@@ -2,7 +2,8 @@ import { Pool } from 'pg';
 import t from 'tap';
 import { createInsertTask, createPlans } from '../../../src/use/pg/plans';
 import { cleanupSchema, createRandomSchema } from './helpers';
-import { migrate } from '../../../src/use/pg/migrations';
+import { migrate } from '../../../src/use/pg/migrate';
+import { createMigrationStore } from '../../../src/use/pg/migrations';
 import { query } from '../../../src/use/pg/sql';
 
 const connectionString = process.env.PG ?? 'postgres://postgres:postgres@localhost:5432/app';
@@ -20,7 +21,9 @@ t.test('postgres plans', async (t) => {
 
   const plans = createPlans(schema);
 
-  await migrate(sqlPool, schema);
+  const migrations = createMigrationStore(schema);
+
+  await migrate(sqlPool, schema, migrations);
 
   t.teardown(async () => {
     await cleanupSchema(sqlPool, schema);

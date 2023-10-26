@@ -279,58 +279,6 @@ t.test('with-pg', async (t) => {
     t.equal(handled, retryLimit + 1);
   });
 
-  t.test('emit tasks with resolve', async ({ teardown, equal, same }) => {
-    const ee = new EventEmitter();
-    const queue = 'emit_tasks_result_resolve';
-    const tb = createTaskBoss(queue);
-
-    const task_name = 'emit_task_resolve';
-    const taskDef = defineTask({
-      task_name: task_name,
-      schema: Type.Object({ works: Type.String() }),
-    });
-    let handled = 0;
-
-    tb.registerTask(taskDef, {
-      handler: async (input, { resolve }) => {
-        handled += 1;
-        equal(input.works, 'abcd');
-        if (handled > 1) {
-          ee.emit('handled');
-        }
-
-        resolve({
-          success: 'with resolve result',
-        });
-
-        return {
-          success: 'with result',
-        };
-      },
-    });
-
-    const pgTasks = withPG(tb, { db: sqlPool, schema: schema });
-
-    await pgTasks.start();
-
-    teardown(() => pgTasks.stop());
-
-    const waitProm = once(ee, 'handled');
-
-    await pgTasks.send(taskDef.from({ works: 'abcd' }), taskDef.from({ works: 'abcd' }));
-    await waitProm;
-
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${task_name}'`)
-      .then((r) => r.rows[0]!);
-
-    same(result.output, {
-      success: 'with resolve result',
-    });
-  });
-
   t.test('stores error as result on task handler throw', async ({ teardown, equal, ok }) => {
     const ee = new EventEmitter();
     const queue = 'emit_tasks_error';

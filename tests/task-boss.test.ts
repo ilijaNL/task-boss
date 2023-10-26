@@ -32,10 +32,7 @@ tap.test('task-boss', async (tap) => {
           id: '123',
           task_name: 'test',
           retried: 0,
-          fail(data) {
-            //
-          },
-          resolve(data) {
+          fail() {
             //
           },
         }
@@ -66,10 +63,7 @@ tap.test('task-boss', async (tap) => {
           id: '123',
           retried: 0,
           task_name: 'test',
-          fail(data) {
-            //
-          },
-          resolve(data) {
+          fail() {
             //
           },
         }
@@ -104,10 +98,7 @@ tap.test('task-boss', async (tap) => {
         id: '123',
         retried: 0,
         task_name: 'test',
-        fail(data) {
-          //
-        },
-        resolve(data) {
+        fail() {
           //
         },
       }

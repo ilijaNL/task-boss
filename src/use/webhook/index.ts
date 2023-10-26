@@ -117,9 +117,6 @@ const withWebhook = (taskBoss: TaskBoss, remote: WebhookService) => {
           fail(data) {
             future.reject(data);
           },
-          resolve(data) {
-            future.resolve(data);
-          },
         })
         .then((data) => {
           future.resolve(data);

@@ -37,6 +37,7 @@
     "postgresql",
     "postgres",
     "queue",
+    "jobs",
     "tasks",
     "events",
     "ddd"

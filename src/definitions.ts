@@ -122,7 +122,6 @@ export type TaskHandlerCtx<Res> = {
   trace?: TaskTrace | undefined;
   retried: number;
   fail: (reason?: any) => void;
-  resolve: (data: Res) => void;
 };
 
 export interface TaskHandler<Input = JsonValue, Res = any> {

@@ -2,7 +2,8 @@ import { Pool, PoolConfig } from 'pg';
 import { BaseClient, IncomingEvent, OutgoingTask, TaskBoss, createTaskFactory } from '../../task-boss';
 import { TEvent, Task, TaskHandler } from '../../definitions';
 import { QueryCommand, createSql, query } from './sql';
-import { migrate } from './migrations';
+import { migrate } from './migrate';
+import { createMigrationStore } from './migrations';
 import {
   InsertTask,
   createPlans,
@@ -70,8 +71,10 @@ export function createEventToCommandFactory(
   }
 ) {
   const plans = createInsertPlans(createSql(schema));
+  const eventsToOut = (e: TEvent) => ({ d: e.data, e_n: e.event_name, rid: opts.retentionInDays });
+
   return function toCommands(...events: TEvent<string>[]): QueryCommand<{}> {
-    return plans.createEvents(events.map((e) => ({ d: e.data, e_n: e.event_name, rid: opts.retentionInDays })));
+    return plans.createEvents(events.map(eventsToOut));
   };
 }
 
@@ -207,22 +210,19 @@ export const createPGTaskService = (service: TaskService, opts: PgOptions): PGTa
     async resolveTask(task) {
       await resolveTaskBatcher.add(task);
     },
-    async handler({ data, meta_data, expire_in_seconds, retrycount, id }): Promise<any> {
+    async handler(task): Promise<any> {
       const future: DeferredPromise = new DeferredPromise();
 
       service
         // todo convert TaskHandlerCtx to class
-        .handleTask(data, {
-          expire_in_seconds: expire_in_seconds,
-          id: id,
-          retried: retrycount,
-          task_name: meta_data.tn,
-          trace: meta_data.trace,
+        .handleTask(task.data, {
+          expire_in_seconds: task.expire_in_seconds,
+          id: task.id,
+          retried: task.retrycount,
+          task_name: task.meta_data.tn,
+          trace: task.meta_data.trace,
           fail(data) {
             future.reject(data);
-          },
-          resolve(data) {
-            future.resolve(data);
           },
         })
         .then((data) => {
@@ -237,6 +237,8 @@ export const createPGTaskService = (service: TaskService, opts: PgOptions): PGTa
     },
   });
 
+  const toInsertTask = (task: OutgoingTask) => createInsertTask(task, keepInSeconds);
+
   // Worker which is responsible for processing incoming events and creating tasks
   const fanoutWorker = createBaseWorker(
     async () => {
@@ -247,12 +249,11 @@ export const createPGTaskService = (service: TaskService, opts: PgOptions): PGTa
         return false;
       }
 
-      const newCursor = +events[events.length - 1]!.position;
-
       const outTasks = await service.mapEvents(events);
 
-      const insertTasks = outTasks.map<InsertTask>((task) => createInsertTask(task, keepInSeconds));
+      const insertTasks = outTasks.map<InsertTask>(toInsertTask);
 
+      const newCursor = +events[events.length - 1]!.position;
       await query(pool, sqlPlans.createTasksAndSetCursor(mQueue, insertTasks, newCursor));
       return events.length === fetchSize;
     },
@@ -294,7 +295,7 @@ export const createPGTaskService = (service: TaskService, opts: PgOptions): PGTa
       state.started = true;
       state.stopped = false;
 
-      await migrate(pool, schema);
+      await migrate(pool, schema, createMigrationStore(schema));
 
       const lastCursor = (await query(pool, sqlPlans.getLastEvent()))[0];
       await query(pool, sqlPlans.ensureQueuePointer(mQueue, +(lastCursor?.position ?? 0)));
