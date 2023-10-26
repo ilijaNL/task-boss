@@ -1,5 +1,11 @@
 # task-boss
 
+## 0.0.10
+
+### Patch Changes
+
+- 6152fbd: Maintaince tasks
+
 ## 0.0.9
 
 ### Patch Changes
