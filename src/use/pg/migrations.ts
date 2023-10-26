@@ -79,10 +79,10 @@ export const createMigrationStore = (schema: string) => [
     WITH (fillfactor=90);
 
     -- get tasks
-    CREATE INDEX ON ${schema}."tasks" ("queue", startAfter) WHERE state < 2;
+    CREATE INDEX ON ${schema}."tasks" ("queue", startAfter) WHERE state < ${TASK_STATES.active};
 
     -- used for expiring tasks
-    CREATE INDEX ON ${schema}."tasks" ("state") WHERE state = 2;
+    CREATE INDEX ON ${schema}."tasks" ("state") WHERE state = ${TASK_STATES.active};
 
     -- singleton task, which holds for scheduled, active, and retry state
     CREATE UNIQUE INDEX ON ${schema}."tasks" ("queue", "singleton_key") WHERE state < ${TASK_STATES.expired};
@@ -130,8 +130,7 @@ export const createMigrationStore = (schema: string) => [
                           ELSE t.retryCount END
           FROM _tasks
           WHERE t.id = _tasks.id
-          RETURNING t.id, t.retryCount, t.state, t.data, t.meta_data, t.config,
-            (EXTRACT(epoch FROM expireIn))::int as expire_in_seconds;
+          RETURNING t.id, t.retryCount, t.state, t.data, t.meta_data, t.config, (EXTRACT(epoch FROM expireIn))::int as expire_in_seconds;
       END
     $$ LANGUAGE 'plpgsql';
 
