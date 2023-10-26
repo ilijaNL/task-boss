@@ -148,7 +148,7 @@ t.test('maintaince worker', async (t) => {
     // notify internal maintance worker that there is work
     mWorker.notify();
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     {
       const r1 = await sqlPool
@@ -182,7 +182,7 @@ t.test('maintaince worker', async (t) => {
     // notify internal maintance worker that there is work
     mWorker.notify();
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     {
       const result = await sqlPool
