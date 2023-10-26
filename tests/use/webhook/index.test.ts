@@ -6,7 +6,7 @@ import { Type } from '@sinclair/typebox';
 import { Request } from '@whatwg-node/fetch';
 import { getHMAC } from '../../../src/use/webhook/crypto';
 
-function createEventRequest(data: IncomingRemoteEvent) {
+function createEventRequest(data: IncomingRemoteEvent[]) {
   return new Request('http://test.localhost', {
     method: 'POST',
     headers: {
@@ -91,7 +91,7 @@ tap.test('happy path with signature', async (t) => {
 
   const payload = JSON.stringify({
     e: true,
-    b: ie,
+    b: [ie],
   });
 
   // no signature
@@ -243,65 +243,11 @@ tap.test('on new task', async (tap) => {
     id: '123',
     r: 0,
     tn: task.task_name,
-    tr: { type: 'direct' },
   });
 
   const res = await handlerBoss.handle(taskReq);
 
   tap.same(await res.json(), handlerResponse);
-});
-
-tap.test('on new task resolve', async (tap) => {
-  const queue = 'task_queue';
-  const tb = createTaskBoss(queue);
-
-  const task_name = 'emit_task';
-
-  const taskDef = defineTask({
-    task_name: task_name,
-    schema: Type.Object({ works: Type.String() }),
-  });
-
-  const task = taskDef.from({ works: '12312312' });
-
-  tb.registerTask(taskDef, {
-    handler: async (r, { resolve }) => {
-      tap.equal(r.works, '12312312');
-
-      resolve({ resolves: true });
-
-      return {
-        success: 'balba',
-      };
-    },
-  });
-
-  const handlerBoss = withHandler(tb, {
-    sign_secret: null,
-    service: {
-      async submitTasks(tasks) {
-        tap.fail('should not call');
-        //
-      },
-      async submitEvents(events) {
-        tap.fail('should not call');
-        //
-      },
-    },
-  });
-
-  const taskReq = createTaskRequest({
-    es: 10,
-    d: task.data,
-    id: '123',
-    r: 0,
-    tn: task.task_name,
-    tr: { type: 'direct' },
-  });
-
-  const res = await handlerBoss.handle(taskReq);
-
-  tap.same(await res.json(), { resolves: true });
 });
 
 tap.test('on new task throws', async (tap) => {
@@ -342,7 +288,6 @@ tap.test('on new task throws', async (tap) => {
     id: '123',
     r: 0,
     tn: task.task_name,
-    tr: { type: 'direct' },
   });
 
   const res = await handlerBoss.handle(taskReq);
@@ -393,7 +338,6 @@ tap.test('on new task fails', async (tap) => {
     id: '123',
     r: 0,
     tn: task.task_name,
-    tr: { type: 'direct' },
   });
 
   const res = await handlerBoss.handle(taskReq);
@@ -450,25 +394,25 @@ tap.test('submit tasks on event', async (tap) => {
 
   tb.on(event1, {
     task_name: 'task1',
-    handler: async (input, { trigger }) => {
+    handler: async (input, { trace }) => {
       tap.equal(input.text, 'text222');
-      tap.equal(trigger.type, 'event');
+      tap.equal(trace?.type, 'event');
     },
   });
 
   tb.on(event1, {
     task_name: 'task_2',
-    handler: async (input, { trigger }) => {
+    handler: async (input, { trace }) => {
       tap.equal(input.text, 'text222');
-      tap.equal(trigger.type, 'event');
+      tap.equal(trace?.type, 'event');
     },
   });
 
   tb.on(event2, {
     task_name: 'task_3',
-    handler: async (input, { trigger }) => {
+    handler: async (input, { trace }) => {
       tap.equal(input.rrr, 'event2');
-      tap.equal(trigger.type, 'event');
+      tap.equal(trace?.type, 'event');
     },
   });
 
@@ -498,8 +442,8 @@ tap.test('submit tasks on event', async (tap) => {
 
   await Promise.all([
     //
-    pgTasks.handle(createEventRequest(ie1)),
-    pgTasks.handle(createEventRequest(ie2)),
+    pgTasks.handle(createEventRequest([ie1])),
+    pgTasks.handle(createEventRequest([ie2])),
   ]);
 
   tap.equal(submittedTasks.length, 3);

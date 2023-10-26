@@ -4,7 +4,7 @@ import { mapCompletionDataArg } from '../../utils';
 
 function failTask(task: SelectTask) {
   const newState = task.retrycount >= task.config.r_l ? TASK_STATES.failed : TASK_STATES.retry;
-  const startAfter = newState === TASK_STATES.retry ? getStartAfter(task) : undefined;
+  const startAfter = newState === TASK_STATES.retry ? getStartAfter(task.retrycount, task.config) : undefined;
 
   return {
     state: newState,
@@ -15,7 +15,7 @@ function failTask(task: SelectTask) {
 export const createTaskWorker = (props: {
   resolveTask: (task: ResolvedTask) => Promise<void>;
   popTasks: (amount: number) => Promise<SelectTask[]>;
-  handler: (event: SelectTask) => Promise<any>;
+  handler: (task: SelectTask) => Promise<any>;
   maxConcurrency: number;
   poolInternvalInMs: number;
   refillThresholdPct: number;

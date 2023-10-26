@@ -1,7 +1,8 @@
 import { Pool } from 'pg';
 import tap from 'tap';
 import { cleanupSchema, createRandomSchema } from './helpers';
-import { createMigrationPlans, createMigrationStore, migrate } from '../../../src/use/pg/migrations';
+import { createMigrationPlans, migrate, migrationTable } from '../../../src/use/pg/migrate';
+import { createMigrationStore } from '../../../src/use/pg/migrations';
 import { query } from '../../../src/use/pg/sql';
 
 const connectionString = process.env.PG ?? 'postgres://postgres:postgres@localhost:5432/app';
@@ -13,11 +14,13 @@ tap.test('happy path', async ({ teardown, equal }) => {
     max: 3,
   });
 
+  const migrations = createMigrationStore(schema);
+
   const plans = createMigrationPlans(schema);
 
-  await migrate(pool, schema);
+  await migrate(pool, schema, migrations);
 
-  const hasMigrations = await query(pool, plans.tableExists('tb_migrations'));
+  const hasMigrations = await query(pool, plans.tableExists(migrationTable));
 
   equal(hasMigrations[0]!.exists, true);
 
@@ -39,7 +42,13 @@ tap.test('concurrently migrate', async ({ teardown }) => {
     max: 3,
   });
 
-  await Promise.all([migrate(p0, schema), migrate(p1, schema), migrate(p0, schema)]);
+  const migrations = createMigrationStore(schema);
+
+  await Promise.all([
+    migrate(p0, schema, migrations),
+    migrate(p1, schema, migrations),
+    migrate(p0, schema, migrations),
+  ]);
 
   teardown(async () => {
     await cleanupSchema(p0, schema);
@@ -56,7 +65,9 @@ tap.test('applies new migration', async ({ teardown, equal }) => {
     max: 2,
   });
 
-  await migrate(pool, schema);
+  const migrations = createMigrationStore(schema);
+
+  await migrate(pool, schema, migrations);
 
   teardown(async () => {
     await cleanupSchema(pool, schema);
@@ -67,7 +78,7 @@ tap.test('applies new migration', async ({ teardown, equal }) => {
 
   const lastId = allMigrations[allMigrations.length - 1]!.id;
 
-  const newMigration = `SELECT * FROM ${schema}.tb_migrations`;
+  const newMigration = `SELECT * FROM ${schema}.${migrationTable}`;
   const migrationStore = createMigrationStore(schema);
 
   await migrate(pool, schema, [...migrationStore, newMigration]);
@@ -90,7 +101,9 @@ tap.test('throws when migration is changed', async ({ teardown, rejects }) => {
     max: 2,
   });
 
-  await migrate(pool, schema);
+  const migrations = createMigrationStore(schema);
+
+  await migrate(pool, schema, migrations);
 
   const migs = createMigrationStore(schema);
   migs[0] = migs[0] + `\n--- schema: ${schema}`;

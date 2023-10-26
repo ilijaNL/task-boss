@@ -7,29 +7,24 @@ export interface TEvent<Name = string, Data = JsonValue> {
   data: Data;
 }
 
-export type TaskTrigger =
-  | {
-      /**
-       * Directly scheduled task
-       */
-      type: 'direct';
-    }
-  | {
-      type: 'event';
-      /**
-       * Triggered by event
-       */
-      e: {
-        /**
-         * Event id
-         */
-        id: string;
-        /**
-         * Event name
-         */
-        name: string;
-      };
-    };
+interface BaseTaskTrace {
+  type: string;
+  t_id: string;
+}
+
+// interface DirectTrace extends BaseTaskTrace {
+//   type: 'direct';
+// }
+
+interface EventTrace extends BaseTaskTrace {
+  type: 'event';
+  /**
+   * Triggered by event
+   */
+  event_name: string;
+}
+
+export type TaskTrace = EventTrace;
 
 export interface EventSpec<Name extends string, Schema extends TSchema> {
   /**
@@ -116,7 +111,7 @@ export interface Task<Data = JsonValue> {
   task_name: string;
   queue?: string;
   data: Data;
-  config: Partial<TaskConfig>;
+  config: TaskConfig;
 }
 
 // export type IncomingTask<Input> = { task_name: string; input: Input; trigger: TaskTrigger; expire_in_seconds: number };
@@ -124,10 +119,9 @@ export type TaskHandlerCtx<Res> = {
   id: string;
   expire_in_seconds: number;
   task_name: string;
-  trigger: TaskTrigger;
+  trace?: TaskTrace | undefined;
   retried: number;
   fail: (reason?: any) => void;
-  resolve: (data: Res) => void;
 };
 
 export interface TaskHandler<Input = JsonValue, Res = any> {
@@ -176,7 +170,7 @@ export const defineTask = <T extends TSchema>(props: DefineTaskProps<T>): TaskDe
       queue: props.queue,
       task_name: props.task_name,
       data: input,
-      config: { ...props.config, ...config },
+      config: { ...defaultTaskConfig, ...props.config, ...config },
     };
   };
 

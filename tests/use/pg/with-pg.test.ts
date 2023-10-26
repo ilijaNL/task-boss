@@ -99,10 +99,9 @@ t.test('with-pg', async (t) => {
     let handled = 0;
 
     tb.registerTask(taskDef, {
-      handler: async (input, { trigger }) => {
+      handler: async (input) => {
         handled += 1;
         equal(input.works, 'abcd');
-        equal(trigger.type, 'direct');
         if (handled > 1) {
           ee.emit('handled');
         }
@@ -134,7 +133,6 @@ t.test('with-pg', async (t) => {
     });
   });
 
-  // TODO: add postgres integration tests with retry & exponential backoff
   t.test('task retry', async (t) => {
     t.plan(2);
     const ee = new EventEmitter();
@@ -281,59 +279,6 @@ t.test('with-pg', async (t) => {
     t.equal(handled, retryLimit + 1);
   });
 
-  t.test('emit tasks with resolve', async ({ teardown, equal, same }) => {
-    const ee = new EventEmitter();
-    const queue = 'emit_tasks_result_resolve';
-    const tb = createTaskBoss(queue);
-
-    const task_name = 'emit_task_resolve';
-    const taskDef = defineTask({
-      task_name: task_name,
-      schema: Type.Object({ works: Type.String() }),
-    });
-    let handled = 0;
-
-    tb.registerTask(taskDef, {
-      handler: async (input, { trigger, resolve }) => {
-        handled += 1;
-        equal(input.works, 'abcd');
-        equal(trigger.type, 'direct');
-        if (handled > 1) {
-          ee.emit('handled');
-        }
-
-        resolve({
-          success: 'with resolve result',
-        });
-
-        return {
-          success: 'with result',
-        };
-      },
-    });
-
-    const pgTasks = withPG(tb, { db: sqlPool, schema: schema });
-
-    await pgTasks.start();
-
-    teardown(() => pgTasks.stop());
-
-    const waitProm = once(ee, 'handled');
-
-    await pgTasks.send(taskDef.from({ works: 'abcd' }), taskDef.from({ works: 'abcd' }));
-    await waitProm;
-
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    const result = await sqlPool
-      .query(`SELECT * FROM ${schema}.tasks_completed WHERE queue = '${queue}' AND meta_data->>'tn' = '${task_name}'`)
-      .then((r) => r.rows[0]!);
-
-    same(result.output, {
-      success: 'with resolve result',
-    });
-  });
-
   t.test('stores error as result on task handler throw', async ({ teardown, equal, ok }) => {
     const ee = new EventEmitter();
     const queue = 'emit_tasks_error';
@@ -417,7 +362,6 @@ t.test('with-pg', async (t) => {
   t.test('emit event', async (t) => {
     const ee = new EventEmitter();
     const tb = createTaskBoss('emit_event_queue');
-    // const bus = createTBus('emit_event_queue', { db: sqlPool, schema: schema });
 
     const event = defineEvent({
       event_name: 'test_event',
@@ -435,27 +379,27 @@ t.test('with-pg', async (t) => {
 
     tb.on(event, {
       task_name: 'task1',
-      handler: async (input, { trigger }) => {
+      handler: async (input, { trace }) => {
         t.equal(input.text, 'text222');
-        t.equal(trigger.type, 'event');
+        t.equal(trace?.type, 'event');
         ee.emit('handled1');
       },
     });
 
     tb.on(event, {
       task_name: 'task_2',
-      handler: async (input, { trigger }) => {
+      handler: async (input, { trace }) => {
         t.equal(input.text, 'text222');
-        t.equal(trigger.type, 'event');
+        t.equal(trace?.type, 'event');
         ee.emit('handled2');
       },
     });
 
     tb.on(event2, {
       task_name: 'task_3',
-      handler: async (input, { trigger }) => {
+      handler: async (input, { trace }) => {
         t.equal(input.rrr, 'event2');
-        t.equal(trigger.type, 'event');
+        t.equal(trace?.type, 'event');
         ee.emit('handled3');
       },
     });
@@ -521,7 +465,6 @@ t.test('with-pg', async (t) => {
   t.test('event handler singleton from payload', async ({ teardown, equal }) => {
     const queue = `singleton_queue_payload`;
     const schema = createRandomSchema();
-    // const bus = createTBus(queue, { db: sqlPool, schema: schema, worker: { intervalInMs: 200 } });
 
     const event = defineEvent({
       event_name: 'event_handler_singleton_payload',
@@ -556,8 +499,8 @@ t.test('with-pg', async (t) => {
     });
 
     const cursor = await sqlPool
-      .query(`SELECT * FROM ${schema}.cursors WHERE svc = '${queue}'`)
-      .then((r) => +r.rows[0].l_p);
+      .query(`SELECT * FROM ${schema}.cursors WHERE queue = '${queue}'`)
+      .then((r) => +r.rows[0].offset);
 
     await pgTb.publish(event.from({ c: 91 }), event.from({ c: 93 }), event.from({ c: 91 }));
     await pgTb.publish(event.from({ c: 91 }));
@@ -573,7 +516,7 @@ t.test('with-pg', async (t) => {
 
     // this means that all events are processed by the service
     equal(
-      await sqlPool.query(`SELECT * FROM ${schema}.cursors WHERE svc = '${queue}'`).then((r) => +r.rows[0].l_p),
+      await sqlPool.query(`SELECT * FROM ${schema}.cursors WHERE queue = '${queue}'`).then((r) => +r.rows[0].offset),
       cursor + 5
     );
   });
@@ -598,11 +541,11 @@ t.test('with-pg', async (t) => {
       await cleanupSchema(sqlPool, schema);
     });
 
-    const result = await sqlPool.query<{ l_p: string }>(
-      `SELECT l_p FROM ${schema}.cursors WHERE svc = 'serviceB' LIMIT 1`
+    const result = await sqlPool.query<{ offset: string }>(
+      `SELECT "offset" FROM ${schema}.cursors WHERE queue = 'serviceB' LIMIT 1`
     );
 
-    equal(result.rows[0]?.l_p, '2');
+    equal(result.rows[0]?.offset, '2');
   });
 
   t.test('cursor', async ({ teardown, equal }) => {

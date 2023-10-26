@@ -1,6 +1,6 @@
-import { TaskTrigger } from '../../definitions';
+import { TaskTrace } from '../../definitions';
 import { OutgoingTask } from '../../task-boss';
-import { JsonObject, JsonValue } from '../../utils';
+import { JsonValue } from '../../utils';
 import { SchemaSQL, createSql } from './sql';
 
 export type TaskName = string;
@@ -27,8 +27,8 @@ type SelectEvent = {
   position: string;
 };
 
-export function getStartAfter(task: SelectTask) {
-  return task.config.r_b ? task.config.r_d * Math.pow(2, task.retrycount) : task.config.r_d;
+export function getStartAfter(retryCount: number, taskConfig: TaskConfig) {
+  return taskConfig.r_b ? taskConfig.r_d * Math.pow(2, retryCount) : taskConfig.r_d;
 }
 
 export type InsertEvent = {
@@ -49,8 +49,30 @@ export type InsertEvent = {
 
 export type MetaData = {
   tn: string;
-  trace: TaskTrigger;
-} & JsonObject;
+  trace?: TaskTrace;
+};
+
+export const defaultKeepInSeconds = 7 * 24 * 60 * 60;
+export const defaultEventRetentionInDays = 30;
+
+export type TaskConfig = {
+  /**
+   * Retry limit
+   */
+  r_l: number;
+  /**
+   * Retry delay in seconds
+   */
+  r_d: number;
+  /**
+   * Retry backoff
+   */
+  r_b: boolean;
+  /**
+   * Keep in seconds after complete
+   */
+  ki_s: number;
+};
 
 export type InsertTask = {
   /**
@@ -70,24 +92,7 @@ export type InsertTask = {
    */
   md: MetaData;
 
-  cf: {
-    /**
-     * Retry limit
-     */
-    r_l: number;
-    /**
-     * Retry delay in seconds
-     */
-    r_d: number;
-    /**
-     * Retry backoff
-     */
-    r_b: boolean;
-    /**
-     * Keep in seconds after complete
-     */
-    ki_s: number;
-  };
+  cf: TaskConfig;
   /**
    * Singleton key
    */
@@ -111,17 +116,17 @@ export type SelectTask = {
   state: TaskState;
   data: JsonValue;
   meta_data: MetaData;
-  config: InsertTask['cf'];
+  config: TaskConfig;
   expire_in_seconds: number;
 };
 
 export type SQLPlans = ReturnType<typeof createPlans>;
 
-export const createInsertTask = (task: OutgoingTask, trigger: TaskTrigger, keepInSeconds: number): InsertTask => ({
+export const createInsertTask = (task: OutgoingTask, keepInSeconds = defaultKeepInSeconds): InsertTask => ({
   d: task.data,
   md: {
     tn: task.task_name,
-    trace: trigger,
+    trace: task.trace,
   },
   q: task.queue,
   eis: task.config.expireInSeconds,
@@ -173,7 +178,7 @@ export const createPlans = (schema: string) => {
    */
   function ensureQueuePointer(queue: string, position: number) {
     return sql`
-      INSERT INTO {{schema}}.cursors (svc, l_p) 
+      INSERT INTO {{schema}}.cursors (queue, "offset")
       VALUES (${queue}, ${position}) 
       ON CONFLICT DO NOTHING`;
   }
@@ -183,31 +188,49 @@ export const createPlans = (schema: string) => {
     return sql`
       with _cu as (
         UPDATE {{schema}}.cursors 
-        SET l_p = ${last_position} 
-        WHERE svc = ${queue}
+        SET "offset" = ${last_position},
+            locked = false
+        WHERE queue = ${queue}
       ) SELECT {{schema}}.create_bus_tasks(${JSON.stringify(tasks)}::jsonb)
     `;
   }
 
+  function unlockCursor(queue: string) {
+    return sql`
+      UPDATE {{schema}}.cursors 
+      SET locked = false,
+          expire_lock_at = null
+      WHERE queue = ${queue}
+    `;
+  }
+
   // the pos > 0 is needed to have an index scan on events table
-  function getCursorLockEvents(queue: string, limit: number) {
+  function getCursorLockEvents(queue: string, limit: number, expireLockInSec: number) {
     const events = sql<SelectEvent>`
-      SELECT 
-        id, 
-        event_name, 
-        event_data,
-        pos as position
-      FROM {{schema}}.events
-      WHERE pos > 0 
-      AND pos > (
+      with _cursor as (
         SELECT 
-          l_p as cursor
+          id,
+          "offset"
         FROM {{schema}}.cursors 
-        WHERE svc = ${queue}
+        WHERE queue = ${queue} AND locked = false
         LIMIT 1
         FOR UPDATE
         SKIP LOCKED
+      ), lock as (
+        UPDATE {{schema}}.cursors
+        SET 
+          locked = true,
+          expire_lock_at = (now() + (${expireLockInSec} * interval '1s'))::timestamptz
+        FROM _cursor
+        WHERE cursors.id = _cursor.id
       )
+      SELECT 
+        events.id as id, 
+        event_name, 
+        event_data,
+        pos as position
+      FROM {{schema}}.events, _cursor
+      WHERE pos > 0 AND pos > _cursor.offset
       ORDER BY pos ASC
       LIMIT ${limit}`;
 
@@ -220,7 +243,13 @@ export const createPlans = (schema: string) => {
     getLastEvent,
     ensureQueuePointer: ensureQueuePointer,
     createTasksAndSetCursor,
+    unlockCursor,
     getCursorLockEvents,
+    expireCursorLocks: () => sql`
+      UPDATE {{schema}}.cursors
+      SET locked = false
+      WHERE locked = true AND expire_lock_at < now()
+    `,
     getAndStartTasks: (queue: string, amount: number) => sql<SelectTask>`
       SELECT
         id,
@@ -233,15 +262,17 @@ export const createPlans = (schema: string) => {
       FROM {{schema}}.get_tasks(${queue}, ${amount}::integer)
     `,
     resolveTasks: (tasks: Array<ResolvedTask>) => sql`SELECT {{schema}}.resolve_tasks(${JSON.stringify(tasks)}::jsonb)`,
-    get_expired_tasks: (limit: number) => sql<SelectTask>`
+    get_expired_tasks: (limit: number) => sql<{
+      id: string;
+      retrycount: number;
+      state: TaskState;
+      config: TaskConfig;
+    }>`
       SELECT
         id,
         retryCount,
         state,
-        data,
-        meta_data,
-        config,
-        (EXTRACT(epoch FROM expireIn))::int as expire_in_seconds
+        config
       FROM {{schema}}.tasks
         WHERE state = ${TASK_STATES.active}
           AND (startedOn + expireIn) < now()

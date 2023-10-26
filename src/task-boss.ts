@@ -9,8 +9,9 @@ import {
   TaskDefinition,
   TaskHandler,
   createEventHandler,
-  defaultTaskConfig,
   TaskClient,
+  defaultTaskConfig,
+  TaskTrace,
 } from './definitions';
 import { JsonValue, resolveWithinSeconds } from './utils';
 
@@ -39,6 +40,7 @@ export type TaskBossState = {
 export type OutgoingTask = Task<JsonValue> & {
   config: TaskConfig;
   queue: string;
+  trace?: TaskTrace;
 };
 
 export type TaskClientImpl<R extends Record<string, TaskDefinition<TSchema>>> = {
@@ -49,31 +51,27 @@ export type TaskClientImpl<R extends Record<string, TaskDefinition<TSchema>>> = 
  * Base interface which is used to create a specific client
  */
 export interface BaseClient {
-  getState: () => TaskBossState;
   send: (...tasks: Task[]) => Promise<void>;
   publish: (...events: TEvent<string, any>[]) => Promise<void>;
 }
 
-export type TaskBoss = {
+export interface TaskBoss {
   /**
    * Queue that is used for this taskboss instance
    */
-  queue: string;
+  queue: Readonly<string>;
+  /**
+   * Execute the handler for an incoming task
+   */
+  handleTask: TaskHandler<unknown>;
   /** Get serializble state of the taskboss */
   getState: () => TaskBossState;
-  /**
-   * Convert a task to outgoing task (which can be submitted)
-   */
-  getTask: (task: Task) => OutgoingTask;
   /**
    * Get tasks from events.
    * This performs no validation against the task schema.
    */
-  toTasks: (event: IncomingEvent) => OutgoingTask[];
-  /**
-   * Execute the handler for an incoming task
-   */
-  handle: TaskHandler<unknown>;
+  eventsToTasks: (events: IncomingEvent[]) => OutgoingTask[];
+  toOutTask: (task: Task) => OutgoingTask;
   /**
    * Register task handler
    */
@@ -102,26 +100,16 @@ export type TaskBoss = {
     client: TaskClient<R>,
     impl: TaskClientImpl<R>
   ) => TaskBoss;
-};
+  hasRegisteredEvent(event_name: string): boolean;
+}
 
 export type TaskOverrideConfig = Partial<Omit<TaskConfig, 'singletonKey' | 'startAfterSeconds'>>;
 
-export type TaskBossConfiguration = {
-  /**
-   * Default configuration of eventHandlers/task handlers
-   */
-  taskOverrideConfig?: TaskOverrideConfig;
-};
-
 type TaskName = string & { __type?: string };
 
-export const createTaskFactory = (queue: string, taskOverrideConfig?: TaskOverrideConfig) => {
+export const createTaskFactory = (queue: string) => {
   return function toTask(task: Task): OutgoingTask {
-    const config: OutgoingTask['config'] = {
-      ...defaultTaskConfig,
-      ...taskOverrideConfig,
-      ...task.config,
-    };
+    const config: OutgoingTask['config'] = task.config;
     return {
       config,
       data: task.data,
@@ -131,37 +119,58 @@ export const createTaskFactory = (queue: string, taskOverrideConfig?: TaskOverri
   };
 };
 
-export const createTaskBoss = (queue: string, opts?: TaskBossConfiguration): TaskBoss => {
-  const eventHandlers: Array<EventHandler<string, any>> = [];
-  const taskHandlersMap = new Map<TaskName, TaskState & { handler: TaskHandler<any> }>();
+export const createTaskBoss = (queue: string): TaskBoss => {
+  // const eventHandlers: Array<EventHandler<string, any>> = [];
 
-  const taskFactory = createTaskFactory(queue, opts?.taskOverrideConfig);
+  /**
+   * key is event name
+   */
+  const eventHandlers = new Map<string, Array<EventHandler<string, any>>>();
+  const taskHandlersMap = new Map<TaskName, TaskState & { handler: TaskHandler<any> }>();
+  const taskFactory = createTaskFactory(queue);
+
+  function addEventHandler(eventHandler: EventHandler<string, any>) {
+    const curr = eventHandlers.get(eventHandler.def.event_name) ?? [];
+    curr.push(eventHandler);
+    eventHandlers.set(eventHandler.def.event_name, curr);
+  }
 
   return {
     get queue() {
       return queue;
     },
-    getTask(task) {
-      return taskFactory(task);
+    hasRegisteredEvent(event_name) {
+      return eventHandlers.has(event_name);
     },
-    toTasks(event) {
-      const handlers = eventHandlers.filter((eh) => eh.def.event_name === event.event_name);
-      return handlers.map<OutgoingTask>((h) => {
-        const config: OutgoingTask['config'] = {
-          ...defaultTaskConfig,
-          ...opts?.taskOverrideConfig,
-          ...(typeof h.config === 'function' ? h.config(event.event_data) : h.config),
-        };
+    toOutTask: taskFactory,
+    eventsToTasks(events) {
+      return events.reduce((agg, event) => {
+        const handlers = eventHandlers.get(event.event_name) ?? [];
 
-        return {
-          data: event.event_data,
-          config: config,
-          task_name: h.task_name,
-          queue: queue,
-        };
-      });
+        for (let i = 0; i < handlers.length; ++i) {
+          const h = handlers[i]!;
+          const config: OutgoingTask['config'] = {
+            ...defaultTaskConfig,
+            ...(typeof h.config === 'function' ? h.config(event.event_data) : h.config),
+          };
+
+          agg.push({
+            data: event.event_data,
+            trace: {
+              type: 'event',
+              t_id: event.id,
+              event_name: event.event_name,
+            },
+            config: config,
+            task_name: h.task_name,
+            queue: queue,
+          });
+        }
+
+        return agg;
+      }, [] as OutgoingTask[]);
     },
-    async handle(input, meta_data) {
+    async handleTask(input, meta_data) {
       const taskHandler = taskHandlersMap.get(meta_data.task_name);
 
       // log
@@ -170,7 +179,7 @@ export const createTaskBoss = (queue: string, opts?: TaskBossConfiguration): Tas
         throw new Error('task handler ' + meta_data.task_name + 'not registered for queue ' + queue);
       }
 
-      return await resolveWithinSeconds(taskHandler.handler(input as any, meta_data), meta_data.expire_in_seconds);
+      return resolveWithinSeconds(taskHandler.handler(input as any, meta_data), meta_data.expire_in_seconds);
     },
     registerTaskClient<R extends Record<string, TaskDefinition<TSchema>>>(
       client: TaskClient<R>,
@@ -196,7 +205,7 @@ export const createTaskBoss = (queue: string, opts?: TaskBossConfiguration): Tas
       }
 
       taskHandlersMap.set(taskDef.task_name, {
-        config: props.overrideConfig ?? taskDef.config ?? opts?.taskOverrideConfig ?? defaultTaskConfig,
+        config: props.overrideConfig ?? taskDef.config ?? defaultTaskConfig,
         handler: props.handler,
         schema: taskDef.schema,
         task_name: taskDef.task_name,
@@ -205,7 +214,7 @@ export const createTaskBoss = (queue: string, opts?: TaskBossConfiguration): Tas
       return this;
     },
     on(eventDef, props) {
-      if (eventHandlers.some((h) => h.task_name === props.task_name)) {
+      if (taskHandlersMap.has(props.task_name)) {
         throw new Error(`task ${props.task_name} already registered`);
       }
 
@@ -214,25 +223,27 @@ export const createTaskBoss = (queue: string, opts?: TaskBossConfiguration): Tas
         schema: eventDef.schema,
         task_name: props.task_name,
         on_event: eventDef.event_name,
-        config: typeof props.config === 'function' ? {} : props.config ?? opts?.taskOverrideConfig ?? defaultTaskConfig,
+        config: typeof props.config === 'function' ? {} : props.config ?? defaultTaskConfig,
       });
 
-      eventHandlers.push(
-        createEventHandler({
-          eventDef: eventDef,
-          handler: props.handler,
-          task_name: props.task_name,
-          config: props.config,
-        })
-      );
+      const eventHandler = createEventHandler({
+        eventDef: eventDef,
+        handler: props.handler,
+        task_name: props.task_name,
+        config: props.config,
+      });
+
+      addEventHandler(eventHandler);
 
       return this;
     },
     getState() {
-      const events: TaskBossState['events'] = eventHandlers.map((eh) => ({
-        event_name: eh.def.event_name,
-        schema: eh.def.schema,
-      }));
+      const events: TaskBossState['events'] = Array.from(eventHandlers.values())
+        .flat()
+        .map((eh) => ({
+          event_name: eh.def.event_name,
+          schema: eh.def.schema,
+        }));
 
       const tasks: TaskBossState['tasks'] = Array.from(taskHandlersMap.values()).map((eh) => ({
         config: eh.config,

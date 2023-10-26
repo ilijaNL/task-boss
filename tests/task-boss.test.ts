@@ -1,37 +1,38 @@
 import { Type } from '@sinclair/typebox';
 import tap from 'tap';
 import stringify from 'safe-stable-stringify';
-import { createTaskBuilder, defineEvent, defineTask, createTaskBoss } from '../src/';
+import { createTaskBuilder, defineEvent, defineTask, createTaskBoss, defaultTaskConfig } from '../src/';
 
 tap.test('task-boss', async (tap) => {
   tap.jobs = 5;
 
   tap.test('create task for queues', async ({ equal }) => {
     const defaultQueue = 'queueA';
-    const taskBoss = createTaskBoss('queueA', {});
+    const taskBoss = createTaskBoss('queueA');
 
-    const sameQueue = taskBoss.getTask({ data: {}, task_name: 'task_a', config: {} });
+    const sameQueue = taskBoss.toOutTask({ data: {}, task_name: 'task_a', config: defaultTaskConfig });
     equal(sameQueue.queue, defaultQueue);
-    const diffQueue = taskBoss.getTask({ data: {}, task_name: 'task_b', config: {}, queue: 'custom_queue' });
+    const diffQueue = taskBoss.toOutTask({
+      data: {},
+      task_name: 'task_b',
+      config: defaultTaskConfig,
+      queue: 'custom_queue',
+    });
     equal(diffQueue.queue, 'custom_queue');
   });
 
   tap.test('throws when task-boss receives unknown event', async (t) => {
-    const taskBoss = createTaskBoss('queueA', {});
+    const taskBoss = createTaskBoss('queueA');
 
     await t.rejects(() =>
-      taskBoss.handle(
+      taskBoss.handleTask(
         {},
         {
           expire_in_seconds: 12,
           id: '123',
           task_name: 'test',
           retried: 0,
-          trigger: { type: 'direct' },
-          fail(data) {
-            //
-          },
-          resolve(data) {
+          fail() {
             //
           },
         }
@@ -40,7 +41,7 @@ tap.test('task-boss', async (tap) => {
   });
 
   tap.test('throws when handler takes to long', async (t) => {
-    const taskBoss = createTaskBoss('queueA', {});
+    const taskBoss = createTaskBoss('queueA');
 
     const event = defineEvent({
       event_name: 'test',
@@ -55,18 +56,14 @@ tap.test('task-boss', async (tap) => {
     });
 
     await t.rejects(() =>
-      taskBoss.handle(
+      taskBoss.handleTask(
         {},
         {
           expire_in_seconds: 0.1,
           id: '123',
           retried: 0,
           task_name: 'test',
-          trigger: { type: 'direct' },
-          fail(data) {
-            //
-          },
-          resolve(data) {
+          fail() {
             //
           },
         }
@@ -75,7 +72,7 @@ tap.test('task-boss', async (tap) => {
   });
 
   tap.test('resovles handler', async (t) => {
-    const taskBoss = createTaskBoss('queueA', {});
+    const taskBoss = createTaskBoss('queueA');
 
     const event = defineEvent({
       event_name: 'test',
@@ -94,18 +91,14 @@ tap.test('task-boss', async (tap) => {
       },
     });
 
-    const result = await taskBoss.handle(
+    const result = await taskBoss.handleTask(
       {},
       {
         expire_in_seconds: 10,
         id: '123',
         retried: 0,
         task_name: 'test',
-        trigger: { type: 'direct' },
-        fail(data) {
-          //
-        },
-        resolve(data) {
+        fail() {
           //
         },
       }
@@ -204,7 +197,7 @@ tap.test('task-boss', async (tap) => {
       handler: async () => {},
     });
 
-    const outgoingTask = taskBoss.getTask(taskDef.from({ works: 'abc' }));
+    const outgoingTask = taskBoss.toOutTask(taskDef.from({ works: 'abc' }));
 
     equal(outgoingTask.config.retryLimit, 4);
     equal(outgoingTask.config.retryDelay, 45);
@@ -215,11 +208,7 @@ tap.test('task-boss', async (tap) => {
 
   tap.test('task options merge', async ({ equal }) => {
     const queue = `task_options`;
-    const taskBoss = createTaskBoss(queue, {
-      taskOverrideConfig: {
-        retryDelay: 212,
-      },
-    });
+    const taskBoss = createTaskBoss(queue);
 
     const taskDef = defineTask({
       task_name: 'options_task',
@@ -235,10 +224,11 @@ tap.test('task-boss', async (tap) => {
       handler: async () => {},
     });
 
-    const outgoingTask = taskBoss.getTask(
+    const outgoingTask = taskBoss.toOutTask(
       taskDef.from(
         { works: 'abc' },
         {
+          retryDelay: 212,
           singletonKey: 'override',
           retryLimit: 4,
           retryBackoff: true,
@@ -256,12 +246,7 @@ tap.test('task-boss', async (tap) => {
 
   tap.test('on event options', async ({ equal }) => {
     const queue = 'handler-options';
-    const taskboss = createTaskBoss(queue, {
-      taskOverrideConfig: {
-        expireInSeconds: 33,
-        retryBackoff: false,
-      },
-    });
+    const taskboss = createTaskBoss(queue);
 
     const event = defineEvent({
       event_name: 'test',
@@ -284,11 +269,13 @@ tap.test('task-boss', async (tap) => {
 
     const eventData = event.from({});
 
-    const tasks = taskboss.toTasks({
-      event_data: eventData.data,
-      event_name: eventData.event_name,
-      id: '123',
-    });
+    const tasks = taskboss.eventsToTasks([
+      {
+        event_data: eventData.data,
+        event_name: eventData.event_name,
+        id: '123',
+      },
+    ]);
 
     equal(tasks.length, 1);
     const task = tasks[0]!;
@@ -321,11 +308,13 @@ tap.test('task-boss', async (tap) => {
 
     const eventData = event.from({ c: 91 });
 
-    const tasks = taskboss.toTasks({
-      event_data: eventData.data,
-      event_name: eventData.event_name,
-      id: '123',
-    });
+    const tasks = taskboss.eventsToTasks([
+      {
+        event_data: eventData.data,
+        event_name: eventData.event_name,
+        id: '123',
+      },
+    ]);
 
     equal(tasks.length, 1);
     const task = tasks[0]!;
@@ -364,6 +353,7 @@ tap.test('taskclient', async (t) => {
       n: 2,
     },
     config: {
+      ...defaultTaskConfig,
       retryDelay: 20,
     },
   });
@@ -374,6 +364,7 @@ tap.test('taskclient', async (t) => {
       n: 'abc',
     },
     config: {
+      ...defaultTaskConfig,
       retryDelay: 10,
     },
   });

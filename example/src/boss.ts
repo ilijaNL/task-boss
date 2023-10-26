@@ -1,13 +1,8 @@
-import { defineEvent, defineTask, createTaskBoss, Type, createTaskClient } from 'task-boss';
+import { defineEvent, defineTask, createTaskBoss, Type, createTaskBuilder } from 'task-boss';
 
 const queue = 'test-queue';
 
-const taskBoss = createTaskBoss(queue, {
-  handlerConfig: {
-    expireInSeconds: 10,
-    retryLimit: 1,
-  },
-});
+const taskBoss = createTaskBoss(queue);
 
 const task = defineTask({
   schema: Type.Object({
@@ -25,7 +20,7 @@ const event = defineEvent({
   }),
 });
 
-const taskClient = createTaskClient(queue)
+const taskClient = createTaskBuilder(queue)
   .defineTask({
     name: 't1',
     schema: Type.Object({
@@ -37,7 +32,8 @@ const taskClient = createTaskClient(queue)
     schema: Type.Object({
       b: Type.String(),
     }),
-  });
+  })
+  .compile();
 
 taskBoss
   .registerTask(task, {
